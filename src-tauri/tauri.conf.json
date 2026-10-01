@@ -58,7 +58,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "REPLACE_WITH_UPDATER_PUBLIC_KEY_RUN_scripts/setup-updater.sh",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQxRjkzOTdCNTZEQzBCQzcKUldUSEM5eFdlem41MGZKTkdNOGd4dUh4ekNzbFVxZ3V2V1pVRm5hN3V6NHVrNU5kQmNtUEo0TWMK",
       "endpoints": [
         "https://github.com/filipohano/videocut/releases/latest/download/latest.json"
       ]
