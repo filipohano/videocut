@@ -58,7 +58,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQxRjkzOTdCNTZEQzBCQzcKUldUSEM5eFdlem41MGZKTkdNOGd4dUh4ekNzbFVxZ3V2V1pVRm5hN3V6NHVrNU5kQmNtUEo0TWMK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENGRjFFMTgwRkJGN0ZFMjgKUldRby92ZjdnT0h4ejdFUWVBWkFtS1VSNzJrWTJLV1V3ODREZlRZNDZTZkR6bFM5VFVZd0Y1a2QK",
       "endpoints": [
         "https://github.com/filipohano/videocut/releases/latest/download/latest.json"
       ]
