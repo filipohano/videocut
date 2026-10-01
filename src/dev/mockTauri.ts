@@ -138,6 +138,8 @@ mockIPC(
       case "plugin:dialog|message":
         return "Yes";
       case "plugin:updater|check":
+        if (params.get("slow")) await sleep(Number(params.get("slow")));
+        if (params.get("fail")) throw "network unreachable";
         return params.get("update")
           ? { rid: 1, currentVersion: "0.1.0", version: "0.2.0", date: "2026-10-01T10:00:00Z", body: "Faster exports and a bigger preview.", rawJson: {} }
           : null;

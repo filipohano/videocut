@@ -6,7 +6,14 @@
     <title>FillernCut</title>
     <link rel="icon" href="/icon.png" />
   </head>
-  <body>
+  <body class="booting">
+    <div id="splash" class="splash" role="status" aria-live="polite">
+      <img src="/icon.png" alt="" width="84" height="84" />
+      <h1>FillernCut</h1>
+      <p id="splash-msg" class="muted">Starting…</p>
+      <div id="splash-bar" class="bar indeterminate"><div class="bar-fill"></div></div>
+      <button id="splash-skip" class="btn small hidden" type="button">Skip</button>
+    </div>
     <div id="app">
       <header class="topbar">
         <div class="brand">

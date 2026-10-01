@@ -6,7 +6,7 @@ import { $, h } from "./dom";
 import { toast } from "./toast";
 
 const MODES: { value: UpdateMode; title: string; help: string }[] = [
-  { value: "auto", title: "Install automatically at launch", help: "Recommended. A newer version is downloaded, installed and the app restarts by itself." },
+  { value: "auto", title: "Install automatically at launch", help: "Recommended. Checked before the app opens: if there's a newer version it is installed first, then the app starts." },
   { value: "notify", title: "Tell me, and let me decide", help: "Shows an “out of date” banner with an Update button." },
   { value: "manual", title: "Only when I check", help: "No check at launch. Use “Check now”." },
 ];

@@ -11,7 +11,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { api, errorMessage } from "./api";
 import { store } from "./store";
 import { $, h, show } from "./ui/dom";
-import { showOverlay } from "./ui/overlay";
+import { showOverlay, type OverlayHandle } from "./ui/overlay";
 
 const LAST_CHECK_KEY = "fillerncut.lastUpdateCheck";
 
@@ -65,11 +65,15 @@ function friendlyUpdateError(msg: string): string {
   return msg;
 }
 
-/** Download, install and restart. Throws if anything goes wrong (the overlay is closed first). */
-export async function installUpdate(): Promise<void> {
+/** Where install progress is shown: the in-app overlay, or the launch splash screen. */
+export type ProgressUi = Pick<OverlayHandle, "setMessage" | "setProgress" | "close">;
+
+/** Download, install and restart. Throws if anything goes wrong (the progress UI is closed first). */
+export async function installUpdate(ui?: ProgressUi): Promise<void> {
   if (!pending) throw new Error("There's no update to install");
   const update = pending;
-  const overlay = showOverlay(`Updating to FillernCut ${update.version}…`, "Downloading the update. The app restarts by itself when it's done.");
+  const overlay =
+    ui ?? showOverlay(`Updating to FillernCut ${update.version}…`, "Downloading the update. The app restarts by itself when it's done.");
   store.setBusy(true);
   let total = 0;
   let done = 0;
@@ -91,24 +95,64 @@ export async function installUpdate(): Promise<void> {
   }
 }
 
-/** Runs once at startup, according to the user's update mode. */
+const SPLASH_CHECK_TIMEOUT_MS = 10_000;
+const SKIP_BUTTON_AFTER_MS = 3_000;
+
+/**
+ * Before the app opens (mode "auto" only): show the splash screen, look for a newer
+ * release and, if there is one, download and install it and restart straight into it,
+ * so you never use an old version. With no update (or offline, or if the check is slow
+ * or fails) it simply lets the app start. It never traps you on the splash screen.
+ */
+export async function launchGate(): Promise<void> {
+  if (store.settings.updateMode !== "auto") return;
+  const msg = $("#splash-msg");
+  const bar = $("#splash-bar");
+  const fill = $(".bar-fill", bar);
+  const btn = $<HTMLButtonElement>("#splash-skip");
+  const ui: ProgressUi = {
+    setMessage: (t) => (msg.textContent = t),
+    setProgress(f) {
+      bar.classList.toggle("indeterminate", f === null);
+      fill.style.width = f === null ? "" : `${Math.round(f * 100)}%`;
+    },
+    close() {},
+  };
+
+  msg.textContent = "Checking for updates…";
+  btn.textContent = "Skip";
+  const showSkip = setTimeout(() => btn.classList.remove("hidden"), SKIP_BUTTON_AFTER_MS);
+  const skipped = new Promise<"skip">((resolve) => (btn.onclick = () => resolve("skip")));
+  const timedOut = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), SPLASH_CHECK_TIMEOUT_MS));
+  const result = await Promise.race([checkForUpdates(), skipped, timedOut]);
+  clearTimeout(showSkip);
+  btn.classList.add("hidden");
+  if (typeof result === "string" || result.status !== "available") return; // up to date, offline, skipped…
+
+  msg.textContent = `Updating to version ${result.version}…`;
+  ui.setProgress(null);
+  try {
+    await installUpdate(ui);
+    // The app is restarting into the new version; don't start the old UI in the meantime.
+    msg.textContent = "Restarting…";
+    await new Promise<never>(() => {});
+  } catch (e) {
+    msg.textContent = `Couldn't install the update (${errorMessage(e)}). You can keep using this version.`;
+    ui.setProgress(0);
+    btn.textContent = "Continue";
+    btn.classList.remove("hidden");
+    await new Promise<void>((resolve) => (btn.onclick = () => resolve()));
+    btn.classList.add("hidden");
+    store.update = { version: result.version, notes: result.notes, error: errorMessage(e) };
+    store.emit("update");
+  }
+}
+
+/** After the app has opened: in "notify" mode, look for an update in the background and show the banner. */
 export async function launchCheck(): Promise<void> {
-  const mode = store.settings.updateMode;
-  if (mode === "manual") return;
+  if (store.settings.updateMode !== "notify") return;
   const result = await checkForUpdates();
-  if (result.status !== "available") {
-    if (result.status === "error") console.warn("Update check failed:", result.message);
-    return;
-  }
-  // Never restart under someone who already started a download or export.
-  if (mode === "auto" && !store.busy) {
-    try {
-      await installUpdate();
-    } catch (e) {
-      store.update = { version: result.version, notes: result.notes, error: errorMessage(e) };
-      store.emit("update");
-    }
-  }
+  if (result.status === "error") console.warn("Update check failed:", result.message);
 }
 
 // ───────────────────────── banner + header chip ─────────────────────────

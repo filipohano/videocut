@@ -38,7 +38,7 @@ On every launch FillernCut asks GitHub whether a newer release exists. Settings 
 
 | Mode | Behaviour |
 | --- | --- |
-| **Install automatically at launch** (default) | Downloads, installs and restarts into the new version. |
+| **Install automatically at launch** (default) | A splash screen checks **before the app opens**. If there is a newer version it is installed first and the app starts as the new version; otherwise it opens as normal. Offline or slow? It skips after a few seconds and opens anyway. |
 | **Tell me, and let me decide** | Shows an "out of date" banner and a header badge with an **Update now** button. |
 | **Only when I check** | No check at launch; use **Check now**. |
 

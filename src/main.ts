@@ -5,7 +5,7 @@ import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, extensionOf } from "./lib/links";
 import { startProgressRouter } from "./progress";
 import { initSession, openVideo } from "./session";
 import { store } from "./store";
-import { initUpdateUi, launchCheck } from "./updates";
+import { initUpdateUi, launchCheck, launchGate } from "./updates";
 import { importWatermark, refreshLibrary } from "./watermarkOps";
 import { $ } from "./ui/dom";
 import { initExportBar } from "./ui/exportBar";
@@ -26,6 +26,10 @@ async function boot(): Promise<void> {
   store.settings = settings;
   store.appVersion = info.version;
   store.encoder = info.encoder;
+
+  // Splash screen: with automatic updates on, check (and install) BEFORE the app opens.
+  await launchGate();
+
   await refreshLibrary().catch((e) => console.warn("library", e));
   await startProgressRouter();
 
@@ -60,7 +64,8 @@ async function boot(): Promise<void> {
     toast("ffmpeg wasn't found. Reinstall FillernCut; exporting and previews need it.", { kind: "error", timeout: 0 });
   }
 
-  // Don't block startup on the network.
+  document.body.classList.remove("booting");
+  // Notify mode: check in the background, without holding up the app.
   void launchCheck();
 }
 
@@ -91,6 +96,7 @@ async function setupDragAndDrop(): Promise<void> {
 }
 
 boot().catch((e) => {
+  document.body.classList.remove("booting");
   console.error(e);
   toast(`FillernCut failed to start: ${errorMessage(e)}`, { kind: "error", timeout: 0 });
 });
