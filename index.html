@@ -77,6 +77,16 @@
                   <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek" />
                 </div>
                 <span id="clock" class="clock muted small">0:00 / 0:00</span>
+                <div class="volume" title="Preview volume — only affects what you hear in the app, not the exported video">
+                  <button id="btn-mute" class="icon-btn vol-btn" aria-label="Mute preview">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor" stroke="none" />
+                      <path class="vol-waves" d="M16 9a4 4 0 010 6M18.5 6.5a8 8 0 010 11" />
+                      <path class="vol-x" d="M16 9l5 6M21 9l-5 6" />
+                    </svg>
+                  </button>
+                  <input id="volume" type="range" min="0" max="100" value="80" step="1" aria-label="Preview volume" />
+                </div>
               </div>
               <p id="source-name" class="muted small source-name"></p>
             </div>
@@ -125,8 +135,13 @@
                 <label class="stack">Codec
                   <select id="codec"></select>
                 </label>
-                <label class="stack">Quality <span class="muted">(higher = better)</span>
-                  <div class="slider-row"><input id="quality" type="range" min="1" max="100" step="1" /><output id="quality-out"></output></div>
+                <label class="stack">Quality
+                  <div class="slider-row">
+                    <span class="muted small">Smaller file</span>
+                    <input id="quality" type="range" min="1" max="100" step="1" />
+                    <span class="muted small">Higher quality</span>
+                    <output id="quality-out"></output>
+                  </div>
                 </label>
                 <p id="codec-help" class="muted small"></p>
                 <p id="output-summary" class="small"></p>

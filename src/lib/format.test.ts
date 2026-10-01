@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { basename, formatClock, formatSeconds, parseSeconds, stem } from "./format";
+import { basename, formatBytes, formatClock, formatSeconds, parseSeconds, stem } from "./format";
 
 describe("formatClock", () => {
   it("formats minutes and hours", () => {
@@ -40,5 +40,15 @@ describe("paths", () => {
     expect(basename("/a/b/clip.final.mp4")).toBe("clip.final.mp4");
     expect(stem("/a/b/clip.final.mp4")).toBe("clip.final");
     expect(stem("noext")).toBe("noext");
+  });
+});
+
+describe("formatBytes", () => {
+  it("picks a readable unit", () => {
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(3_100_000)).toBe("3.1 MB");
+    expect(formatBytes(26_500_000)).toBe("27 MB");
+    expect(formatBytes(1_234_000_000)).toBe("1.2 GB");
+    expect(formatBytes(NaN)).toBe("—");
   });
 });

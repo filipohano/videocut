@@ -21,14 +21,17 @@ let settings: Settings = {
   cookiesBrowser: null,
   downloadDir: null,
   exportDir: null,
-  quality: 75,
+  askExportLocation: false,
+  exportQuality: 60,
 };
 
-const entry = (id: string, name: string, file: string, aspect: number, nx: number, ny: number, scale: number, opacity: number): WatermarkEntry => ({
-  id, name, fileName: file, aspect, nx, ny, scale, opacity, path: `/dev/${file}`,
+const entry = (id: string, name: string, file: string, aspect: number, nx: number, ny: number, scale: number, opacity: number, content = { l: 0, t: 0, r: 1, b: 1 }): WatermarkEntry => ({
+  id, name, fileName: file, aspect, nx, ny, scale, opacity, content, text: null, path: `/dev/${file}`,
 });
 let library: WatermarkEntry[] = [
   entry("a", "Brand logo", "logo-a.png", 0.35, 0.74, 0.88, 0.2, 0.9),
+  // Wide PNG with lots of transparent margin around the visible part
+  entry("p", "Padded logo", "logo-padded.png", 0.5, 0.3, 0.3, 0.5, 1, { l: 0.3, t: 0.3, r: 0.7, b: 0.7 }),
   entry("b", "@filippohano handle", "logo-b.png", 0.2, 0.05, 0.05, 0.3, 0.6),
 ];
 
@@ -49,7 +52,7 @@ function probe(url: string): Promise<MediaInfo> {
     const v = document.createElement("video");
     v.preload = "metadata";
     v.onloadedmetadata = () =>
-      resolve({ width: v.videoWidth, height: v.videoHeight, duration: v.duration, fps: 30, videoCodec: "h264", hasAudio: true, audioCodec: "aac" });
+      resolve({ width: v.videoWidth, height: v.videoHeight, duration: v.duration, fps: 30, bitrate: 600_000, videoCodec: "h264", hasAudio: true, audioCodec: "aac" });
     v.onerror = () => reject("Couldn't read that file as a video. Run `npm run dev:assets` to create sample media.");
     v.src = url;
   });
@@ -86,7 +89,25 @@ mockIPC(
       case "make_preview":
         return a.path;
       case "default_save_path":
-        return "/Users/you/Movies/sample-cut.mp4";
+        return "/Users/you/Movies/FillernCut/Finished/2026-10-01_15-42-07.mp4";
+      case "export_dir":
+        return "/Users/you/Movies/FillernCut/Finished";
+      case "estimate_export": {
+        const s = a.spec;
+        const c = s.crop ?? { w: s.sourceWidth, h: s.sourceHeight };
+        const secs = (s.trimEnd ?? s.sourceDuration) - (s.trimStart ?? 0);
+        const rate = (s.sourceBitrate ?? 2_000_000) * Math.pow((c.w * c.h) / (s.sourceWidth * s.sourceHeight), 0.85) * Math.pow(2, (s.quality - 50) / 25);
+        return { videoBitrate: Math.round(rate), bytes: Math.round(((rate + 128_000) * secs) / 8) };
+      }
+      case "library_add_text": {
+        const e = { ...entry(crypto.randomUUID(), String(a.style.text).split("\n")[0].slice(0, 28), "logo-b.png", 0.2, 0.5, 0.85, 0.4, 1), text: a.style };
+        library = [...library, e];
+        return e;
+      }
+      case "library_replace_text": {
+        library = library.map((e) => (e.id === a.id ? { ...e, text: a.style, name: String(a.style.text).split("\n")[0].slice(0, 28) } : e));
+        return library.find((e) => e.id === a.id);
+      }
       case "export_video":
         await simulate("export", "Exporting…", 3000);
         return a.spec.output;
@@ -94,7 +115,7 @@ mockIPC(
         await simulate("download", "Downloading…", 2400);
         return { path: "/dev/sample.webm", platform: "tiktok", title: null };
       case "download_dir":
-        return "/Users/you/Movies/FillernCut";
+        return "/Users/you/Movies/FillernCut/Footage";
       case "cancel_job":
         cancelled.add(a.job);
         return null;

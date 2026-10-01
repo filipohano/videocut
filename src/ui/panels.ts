@@ -1,10 +1,12 @@
 /** Crop, trim and output-quality panels in the right-hand column. */
 import { api } from "../api";
 import { ASPECT_OPTIONS, clampRect, evenRect, fitRatio, fullRect, ratioValue, type Rect } from "../lib/crop";
-import { clamp, formatSeconds, parseDecimal, parseSeconds } from "../lib/format";
+import { clamp, formatBytes, formatSeconds, parseDecimal, parseSeconds } from "../lib/format";
+import { buildExportSpec } from "../lib/spec";
 import { store } from "../store";
 import { reclampAll } from "../watermarkOps";
 import { $, debounce, h } from "./dom";
+import { bindRange } from "./range";
 import type { Stage } from "./stage";
 
 const locale = navigator.language;
@@ -157,36 +159,58 @@ export function initOutputPanel(): void {
     codec.disabled = true;
     help.textContent =
       store.encoder === "videotoolbox"
-        ? "Encoded by your Mac's media engine — several times faster than the CPU and very light on battery. 75 is a great default for social media; 90+ is near-lossless but the files get large. Always 4:2:0 (the most compatible)."
+        ? "Encoded by your Mac's media engine: fast and light on battery. The file size follows the original video: 50 keeps about the same size, every 25 steps up doubles it (and the quality headroom), every 25 down halves it. The default is a good fit for social media."
         : store.encoder === "libx264"
-          ? "VideoToolbox isn't available on this machine, so the CPU encoder is used. 75 is a great default for social media."
+          ? "VideoToolbox isn't available on this machine, so the CPU encoder is used. 50 keeps about the same size as the original."
           : "ffmpeg wasn't found, so exporting is unavailable. Reinstall FillernCut.";
   }
 
   const persist = debounce(() => {
-    api.saveSettings({ ...store.settings, quality: Number(quality.value) }).then((s) => (store.settings = s));
+    api.saveSettings({ ...store.settings, exportQuality: Number(quality.value) }).then((s) => (store.settings = s));
   }, 500);
 
-  quality.addEventListener("input", () => {
-    const q = Number(quality.value);
+  const range = bindRange(quality, (q) => {
     out.textContent = String(q);
     if (store.video) store.video.quality = q;
     persist();
+    refreshEstimate();
   });
 
-  function renderSummary(): void {
+  let latest = 0;
+  const estimate = debounce(async () => {
     const v = store.video;
     if (!v) return;
-    quality.value = String(v.quality);
-    out.textContent = String(v.quality);
+    const ticket = ++latest;
+    try {
+      const est = await api.estimateExport(buildExportSpec(v, "estimate.mp4"));
+      if (ticket === latest) renderSummary(est.bytes);
+    } catch {
+      if (ticket === latest) renderSummary(null);
+    }
+  }, 120);
+  function refreshEstimate(): void {
+    renderSummary(null, true);
+    estimate();
+  }
+
+  function renderSummary(bytes: number | null, keepOld = false): void {
+    const v = store.video;
+    if (!v) return;
     const c = evenRect(v.crop);
     const len = Math.max(0, v.trimEnd - v.trimStart);
     const wms = v.watermarks.length;
-    summary.textContent =
-      `Output: ${c.w} × ${c.h} · ${formatSeconds(len, locale)} s` + (wms ? ` · ${wms} watermark${wms > 1 ? "s" : ""}` : "");
+    const base = `Output: ${c.w} × ${c.h} · ${formatSeconds(len, locale)} s` + (wms ? ` · ${wms} watermark${wms > 1 ? "s" : ""}` : "");
+    if (bytes !== null) summary.textContent = `${base} · about ${formatBytes(bytes)}`;
+    else if (!keepOld) summary.textContent = base;
   }
-  store.on(["video", "crop", "trim", "watermarks"], renderSummary);
+
+  store.on(["video", "crop", "trim", "watermarks"], () => {
+    const v = store.video;
+    if (!v) return;
+    range.set(v.quality);
+    out.textContent = String(v.quality);
+    refreshEstimate();
+  });
   store.on("video", renderCodec);
   renderCodec();
 }
-

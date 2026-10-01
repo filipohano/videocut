@@ -13,6 +13,8 @@ pub struct MediaInfo {
     pub height: u32,
     pub duration: f64,
     pub fps: Option<f64>,
+    /// Video stream bitrate in bits/s (estimated from the container when the stream doesn't say).
+    pub bitrate: Option<u64>,
     pub video_codec: Option<String>,
     pub has_audio: bool,
     pub audio_codec: Option<String>,
@@ -104,10 +106,26 @@ pub fn parse_ffprobe(json: &str) -> Result<MediaInfo, String> {
         .or_else(|| parse_f(video.get("duration")))
         .unwrap_or(0.0);
 
+    let bit_rate = |v: Option<&Value>| -> Option<u64> { parse_f(v).filter(|b| *b > 0.0).map(|b| b as u64) };
+    let bitrate = bit_rate(video.get("bit_rate")).or_else(|| {
+        // Streams often omit it (e.g. WebM, some MKV): take the container's total
+        // and subtract the audio stream.
+        let total = bit_rate(root.pointer("/format/bit_rate"))?;
+        let audio_rate = audio.and_then(|a| bit_rate(a.get("bit_rate"))).unwrap_or(0);
+        Some(if audio_rate > 0 {
+            total.saturating_sub(audio_rate).max(total / 10)
+        } else if audio.is_some() {
+            total * 9 / 10
+        } else {
+            total
+        })
+    });
+
     Ok(MediaInfo {
         width,
         height,
         duration,
+        bitrate,
         fps: video
             .get("avg_frame_rate")
             .and_then(|v| v.as_str())
@@ -136,9 +154,9 @@ mod tests {
         {"codec_type":"video","codec_name":"hevc","width":1920,"height":1080,
          "avg_frame_rate":"30000/1001","disposition":{"attached_pic":0},
          "side_data_list":[{"side_data_type":"Display Matrix","rotation":-90}]},
-        {"codec_type":"audio","codec_name":"aac"}
+        {"codec_type":"audio","codec_name":"aac","bit_rate":"128000"}
       ],
-      "format": {"duration":"9.700000"}
+      "format": {"duration":"9.700000","bit_rate":"2600000"}
     }"#;
 
     #[test]
@@ -149,6 +167,8 @@ mod tests {
         assert!(info.has_audio);
         assert_eq!(info.audio_codec.as_deref(), Some("aac"));
         assert_eq!(info.video_codec.as_deref(), Some("hevc"));
+        // No stream bitrate: container total minus the audio stream.
+        assert_eq!(info.bitrate, Some(2_472_000));
         assert!((info.fps.unwrap() - 29.97).abs() < 0.01);
     }
 
@@ -167,6 +187,14 @@ mod tests {
             {"codec_type":"video","codec_name":"mjpeg","width":500,"height":500,"disposition":{"attached_pic":1}},
             {"codec_type":"audio","codec_name":"mp3"}],"format":{"duration":"3"}}"#;
         assert!(parse_ffprobe(json).is_err());
+    }
+
+    #[test]
+    fn stream_bitrate_wins_and_missing_bitrate_is_none() {
+        let with = r#"{"streams":[{"codec_type":"video","codec_name":"h264","width":10,"height":10,"bit_rate":"1500000"}],"format":{"duration":"1","bit_rate":"9"}}"#;
+        assert_eq!(parse_ffprobe(with).unwrap().bitrate, Some(1_500_000));
+        let none = r#"{"streams":[{"codec_type":"video","codec_name":"h264","width":10,"height":10}],"format":{"duration":"1"}}"#;
+        assert_eq!(parse_ffprobe(none).unwrap().bitrate, None);
     }
 
     #[test]

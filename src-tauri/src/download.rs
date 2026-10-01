@@ -13,7 +13,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
-use tauri::{AppHandle, Manager, Runtime, State};
+use tauri::{AppHandle, Runtime, State};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
@@ -51,26 +51,11 @@ fn http_client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-pub fn default_download_dir<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
-    app.path()
-        .video_dir()
-        .or_else(|_| app.path().download_dir())
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("FillernCut")
-}
-
 #[tauri::command]
 pub fn download_dir<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> String {
-    resolve_download_dir(&app, &state).to_string_lossy().into_owned()
-}
-
-fn resolve_download_dir<R: Runtime>(app: &AppHandle<R>, state: &AppState) -> PathBuf {
-    state
-        .settings()
-        .download_dir
-        .filter(|d| !d.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| default_download_dir(app))
+    crate::dirs::footage_dir(&app, &state)
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[tauri::command]
@@ -80,9 +65,17 @@ pub async fn download_link<R: Runtime>(
     url: String,
 ) -> Result<DownloadResult, String> {
     let link = parse_link(&url).map_err(|e| e.to_string())?;
-    let out_dir = resolve_download_dir(&app, &state);
+    let out_dir = crate::dirs::footage_dir(&app, &state);
     std::fs::create_dir_all(&out_dir)
         .map_err(|e| format!("Can't create the download folder {}: {e}", out_dir.display()))?;
+
+    // One timestamp name for whatever this download produces.
+    let target = crate::dirs::new_video_path(&out_dir).map_err(|e| e.to_string())?;
+    let stem = target
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("video")
+        .to_string();
 
     let guard = state.begin_job(JOB)?;
     emit_progress(&app, JOB, None, Some("Looking up the post…"));
@@ -90,10 +83,10 @@ pub async fn download_link<R: Runtime>(
     let platform = link.platform();
     let result = match &link {
         ParsedLink::TikTok { .. } | ParsedLink::TikTokShort { .. } => {
-            download_tiktok(&app, &state, &guard.token, &link, &out_dir).await
+            download_tiktok(&app, &state, &guard.token, &link, &out_dir, &stem).await
         }
         ParsedLink::Instagram { url } | ParsedLink::Twitter { url } => {
-            download_with_ytdlp(&app, &state, &guard.token, url, platform, &out_dir)
+            download_with_ytdlp(&app, &state, &guard.token, url, platform, &out_dir, &stem)
                 .await
                 .map(|p| (p, None))
         }
@@ -117,11 +110,13 @@ async fn download_with_ytdlp<R: Runtime>(
     url: &str,
     platform: Platform,
     out_dir: &Path,
+    stem: &str,
 ) -> Result<PathBuf, String> {
     let settings = state.settings();
     let opts = DownloadOptions {
         url: url.to_string(),
         out_dir: out_dir.to_path_buf(),
+        file_stem: stem.to_string(),
         ffmpeg_dir: bins::ffmpeg_dir(),
         cookies_browser: settings.cookies_browser,
     };
@@ -202,6 +197,7 @@ async fn download_tiktok<R: Runtime>(
     token: &CancellationToken,
     link: &ParsedLink,
     out_dir: &Path,
+    stem: &str,
 ) -> Result<(PathBuf, Option<String>), String> {
     let client = http_client()?;
     let canonical = match link {
@@ -211,8 +207,8 @@ async fn download_tiktok<R: Runtime>(
     };
 
     match fetch_tiktok_media(&client, &canonical, token).await {
-        Ok(TikTokMedia::Video { id, url, title }) => {
-            let dest = out_dir.join(format!("tiktok-{id}.mp4"));
+        Ok(TikTokMedia::Video { url, title, .. }) => {
+            let dest = out_dir.join(format!("{stem}.mp4"));
             emit_progress(app, JOB, Some(0.0), Some("Downloading…"));
             match download_file(&client, &url, &dest, token, |f| {
                 emit_progress(app, JOB, Some(f), Some("Downloading…"))
@@ -239,6 +235,7 @@ async fn download_tiktok<R: Runtime>(
                 &images,
                 music.as_deref(),
                 out_dir,
+                stem,
             )
             .await?;
             return Ok((path, title));
@@ -249,7 +246,7 @@ async fn download_tiktok<R: Runtime>(
 
     // Fallback: yt-dlp handles ordinary TikTok videos on its own.
     emit_progress(app, JOB, None, Some("Trying the backup downloader…"));
-    download_with_ytdlp(app, state, token, &canonical, Platform::TikTok, out_dir)
+    download_with_ytdlp(app, state, token, &canonical, Platform::TikTok, out_dir, stem)
         .await
         .map(|p| (p, None))
 }
@@ -350,6 +347,7 @@ async fn build_photo_slideshow<R: Runtime>(
     images: &[String],
     music: Option<&str>,
     out_dir: &Path,
+    stem: &str,
 ) -> Result<PathBuf, String> {
     let work = state.cache_dir.join(format!("slideshow-{id}"));
     let _ = tokio::fs::remove_dir_all(&work).await;
@@ -392,8 +390,8 @@ async fn build_photo_slideshow<R: Runtime>(
         }
     }
 
-    let dest = out_dir.join(format!("tiktok-{id}.mp4"));
-    let partial = out_dir.join(format!("tiktok-{id}.partial.mp4"));
+    let dest = out_dir.join(format!("{stem}.mp4"));
+    let partial = out_dir.join(format!("{stem}.partial.mp4"));
     let spec = SlideshowSpec {
         images: local_images,
         audio: local_audio,

@@ -27,17 +27,61 @@ pub struct CropRect {
     pub h: u32,
 }
 
+/// The visible (non-transparent) part of a watermark image, as fractions of
+/// the image: `l`/`t` where the content starts, `r`/`b` where it ends.
+///
+/// Watermarks may be moved so their transparent margins leave the frame, but
+/// the visible content must stay inside it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ContentBox {
+    pub l: f64,
+    pub t: f64,
+    pub r: f64,
+    pub b: f64,
+}
+
+impl Default for ContentBox {
+    fn default() -> Self {
+        ContentBox {
+            l: 0.0,
+            t: 0.0,
+            r: 1.0,
+            b: 1.0,
+        }
+    }
+}
+
+impl ContentBox {
+    /// Force sane values (finite, inside 0..1, at least 1% wide/tall).
+    pub fn sanitized(self) -> ContentBox {
+        let f = |v: f64, d: f64| if v.is_finite() { v.clamp(0.0, 1.0) } else { d };
+        let (l, t, r, b) = (f(self.l, 0.0), f(self.t, 0.0), f(self.r, 1.0), f(self.b, 1.0));
+        if r - l < 0.01 || b - t < 0.01 {
+            return ContentBox::default();
+        }
+        ContentBox { l, t, r, b }
+    }
+
+    fn is_full(&self) -> bool {
+        self.l <= 0.0 && self.t <= 0.0 && self.r >= 1.0 && self.b >= 1.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WatermarkPlacement {
     pub path: String,
-    /// Top-left corner as a fraction of the *cropped* frame (0..1).
+    /// Top-left corner of the *image* as a fraction of the cropped frame. May be
+    /// negative or past 1 when only transparent margin leaves the frame.
     pub nx: f64,
     pub ny: f64,
-    /// Watermark width as a fraction of the cropped frame width (0..1].
+    /// Image width as a fraction of the cropped frame width.
     pub scale: f64,
     /// 0 = invisible, 1 = fully opaque.
     pub opacity: f64,
+    /// Where the visible content sits inside the image (default: all of it).
+    #[serde(default)]
+    pub content: ContentBox,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -55,7 +99,13 @@ pub struct ExportSpec {
     pub trim_start: Option<f64>,
     pub trim_end: Option<f64>,
     pub watermarks: Vec<WatermarkPlacement>,
-    /// 1..=100, higher is better.
+    /// Bitrate of the source video stream, bits/s, when known.
+    #[serde(default)]
+    pub source_bitrate: Option<u64>,
+    #[serde(default)]
+    pub fps: Option<f64>,
+    /// 1..=100. 50 aims for roughly the source's quality and file size, each
+    /// step of 25 doubles / halves the bitrate.
     pub quality: u8,
 }
 
@@ -78,38 +128,41 @@ impl Encoder {
         }
     }
 
-    fn video_args(self, quality: u8) -> Vec<String> {
-        let q = quality.clamp(1, 100);
+    fn video_args(self, bitrate: u64) -> Vec<String> {
+        let br = bitrate.clamp(MIN_BITRATE, MAX_BITRATE);
         match self {
             Encoder::VideoToolbox => s(&[
                 "-c:v",
                 "h264_videotoolbox",
-                "-q:v",
-                &q.to_string(),
+                "-b:v",
+                &br.to_string(),
                 "-profile:v",
                 "high",
                 "-tag:v",
                 "avc1",
             ]),
-            Encoder::Libx264 => {
-                // 100 → crf 4 (near lossless), 50 → ~18, 1 → ~33
-                let crf = (33.0 - (q as f64) * 0.29).round().clamp(4.0, 33.0) as u32;
-                s(&[
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "medium",
-                    "-crf",
-                    &crf.to_string(),
-                    "-profile:v",
-                    "high",
-                    "-tag:v",
-                    "avc1",
-                ])
-            }
+            Encoder::Libx264 => s(&[
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
+                "-b:v",
+                &br.to_string(),
+                "-maxrate",
+                &(br * 2).to_string(),
+                "-bufsize",
+                &(br * 2).to_string(),
+                "-profile:v",
+                "high",
+                "-tag:v",
+                "avc1",
+            ]),
         }
     }
 }
+
+const MIN_BITRATE: u64 = 300_000;
+const MAX_BITRATE: u64 = 60_000_000;
 
 fn s(v: &[&str]) -> Vec<String> {
     v.iter().map(|x| x.to_string()).collect()
@@ -170,11 +223,16 @@ impl ExportSpec {
     }
 }
 
+/// Largest watermark scale (image width / frame width). Large because a
+/// watermark with lots of transparent margin needs a big image to make its
+/// visible part fill the frame.
+pub const MAX_WATERMARK_SCALE: f64 = 10.0;
+const MAX_WATERMARK_PX: u32 = 8192;
+
 /// Pixel width of a watermark inside a cropped frame `crop_w` wide.
 pub fn watermark_width(scale: f64, crop_w: u32) -> u32 {
     let scale = if scale.is_finite() { scale } else { 0.2 };
-    let w = even_round(scale.clamp(0.01, 1.0) * crop_w as f64);
-    w.min(even_down(crop_w).max(2))
+    even_round(scale.clamp(0.01, MAX_WATERMARK_SCALE) * crop_w as f64).min(MAX_WATERMARK_PX)
 }
 
 fn clamp01(v: f64) -> f64 {
@@ -183,6 +241,24 @@ fn clamp01(v: f64) -> f64 {
     } else {
         0.0
     }
+}
+
+/// Lowest and highest allowed overlay offset along one axis, as ffmpeg expressions.
+fn bounds(start: f64, end: f64, own: &str, frame: &str, full: bool) -> (String, String) {
+    if full || (start <= 0.0 && end >= 1.0) {
+        return ("0".into(), format!("{frame}-{own}"));
+    }
+    let lo = if start <= 0.0 {
+        "0".to_string()
+    } else {
+        format!("-{}*{own}", fnum(start))
+    };
+    let hi = if end >= 1.0 {
+        format!("{frame}-{own}")
+    } else {
+        format!("{frame}-{}*{own}", fnum(end))
+    };
+    (lo, hi)
 }
 
 pub fn build_filter_complex(spec: &ExportSpec) -> Result<String, ExportError> {
@@ -198,8 +274,10 @@ pub fn build_filter_complex(spec: &ExportSpec) -> Result<String, ExportError> {
         let idx = i + 1;
         let width = watermark_width(wm.scale, crop.w);
         let opacity = clamp01(wm.opacity);
-        let x = (clamp01(wm.nx) * crop.w as f64).round() as i64;
-        let y = (clamp01(wm.ny) * crop.h as f64).round() as i64;
+        let finite = |v: f64| if v.is_finite() { v.clamp(-20.0, 20.0) } else { 0.0 };
+        let x = (finite(wm.nx) * crop.w as f64).round() as i64;
+        let y = (finite(wm.ny) * crop.h as f64).round() as i64;
+        let c = wm.content.sanitized();
 
         let mut chain = format!("[{idx}:v]scale={width}:-2,format=rgba");
         if opacity < 0.999 {
@@ -208,10 +286,12 @@ pub fn build_filter_complex(spec: &ExportSpec) -> Result<String, ExportError> {
         chain.push_str(&format!("[w{idx}]"));
         parts.push(chain);
 
-        // The clamp keeps the watermark fully inside the frame whatever its
-        // aspect ratio is.
+        // The clamp keeps the watermark's *visible content* inside the frame; its
+        // transparent margins may hang outside.
+        let (x_lo, x_hi) = bounds(c.l, c.r, "overlay_w", "main_w", c.is_full());
+        let (y_lo, y_hi) = bounds(c.t, c.b, "overlay_h", "main_h", c.is_full());
         parts.push(format!(
-            "[c{prev}][w{idx}]overlay=x='min(max(0,{x}),main_w-overlay_w)':y='min(max(0,{y}),main_h-overlay_h)':format=auto[c{idx}]",
+            "[c{prev}][w{idx}]overlay=x='min(max({x_lo},{x}),{x_hi})':y='min(max({y_lo},{y}),{y_hi})':format=auto[c{idx}]",
             prev = idx - 1,
         ));
     }
@@ -222,6 +302,39 @@ pub fn build_filter_complex(spec: &ExportSpec) -> Result<String, ExportError> {
 
 fn copyable_audio(codec: Option<&str>) -> bool {
     matches!(codec, Some("aac" | "mp3" | "ac3" | "eac3"))
+}
+
+/// Video bitrate (bits/s) the export aims for: the source's own bitrate, scaled
+/// for the cropped area and the quality slider. Keeps files about as big as the
+/// original instead of ballooning, which fixed-quality modes do.
+pub fn target_bitrate(spec: &ExportSpec) -> u64 {
+    let src_px = (spec.source_width.max(1) as f64) * (spec.source_height.max(1) as f64);
+    let crop_px = spec
+        .normalized_crop()
+        .map(|c| (c.w * c.h) as f64)
+        .unwrap_or(src_px);
+    let fps = spec
+        .fps
+        .filter(|f| f.is_finite() && *f > 1.0)
+        .unwrap_or(30.0)
+        .min(120.0);
+    // Without a known bitrate assume a typical ~0.09 bits per pixel per frame.
+    let base = spec
+        .source_bitrate
+        .filter(|b| *b > 0)
+        .map(|b| b as f64)
+        .unwrap_or(0.09 * src_px * fps);
+    let mult = 2f64.powf((spec.quality.clamp(1, 100) as f64 - 50.0) / 25.0);
+    // Smaller frames need relatively more bits per pixel, so area scales sub-linearly.
+    let rate = base * (crop_px / src_px).powf(0.85) * mult;
+    (rate.clamp(MIN_BITRATE as f64, MAX_BITRATE as f64)) as u64
+}
+
+/// Rough output size in bytes (video target + 128 kbit/s audio).
+pub fn estimate_bytes(spec: &ExportSpec) -> u64 {
+    let secs = export_duration(spec).max(0.0);
+    let audio = if spec.has_audio { 128_000.0 } else { 0.0 };
+    ((target_bitrate(spec) as f64 + audio) * secs / 8.0) as u64
 }
 
 pub fn build_export_args(spec: &ExportSpec, encoder: Encoder) -> Result<Vec<String>, ExportError> {
@@ -248,7 +361,7 @@ pub fn build_export_args(spec: &ExportSpec, encoder: Encoder) -> Result<Vec<Stri
         a.extend(s(&["-map", "0:a:0"]));
     }
     a.extend(s(&["-map_metadata", "0"]));
-    a.extend(encoder.video_args(spec.quality));
+    a.extend(encoder.video_args(target_bitrate(spec)));
     a.extend(s(&["-pix_fmt", "yuv420p"]));
 
     if !spec.has_audio {
@@ -256,7 +369,7 @@ pub fn build_export_args(spec: &ExportSpec, encoder: Encoder) -> Result<Vec<Stri
     } else if trim.is_none() && copyable_audio(spec.audio_codec.as_deref()) {
         a.extend(s(&["-c:a", "copy"]));
     } else {
-        a.extend(s(&["-c:a", "aac", "-b:a", "256k"]));
+        a.extend(s(&["-c:a", "aac", "-b:a", "160k"]));
     }
 
     if let Some((_, dur)) = trim {
@@ -298,7 +411,7 @@ pub fn build_preview_args(input: &str, output: &str, encoder: Encoder, has_audio
     } else {
         a.push("-an".into());
     }
-    a.extend(encoder.video_args(55));
+    a.extend(encoder.video_args(2_500_000));
     a.extend(s(&["-pix_fmt", "yuv420p", "-movflags", "+faststart", output]));
     a
 }
@@ -366,7 +479,7 @@ pub fn build_slideshow_args(spec: &SlideshowSpec, encoder: Encoder) -> Result<Ve
     } else {
         a.push("-an".into());
     }
-    a.extend(encoder.video_args(85));
+    a.extend(encoder.video_args(6_000_000));
     a.extend(s(&[
         "-pix_fmt",
         "yuv420p",
@@ -396,7 +509,9 @@ mod tests {
             trim_start: None,
             trim_end: None,
             watermarks: vec![],
-            quality: 75,
+            source_bitrate: Some(4_000_000),
+            fps: Some(30.0),
+            quality: 50,
         }
     }
 
@@ -407,6 +522,7 @@ mod tests {
             ny,
             scale,
             opacity,
+            content: ContentBox::default(),
         }
     }
 
@@ -427,7 +543,11 @@ mod tests {
             "[0:v]crop=1080:1920:0:0[c0];[c0]format=yuv420p[vout]"
         );
         assert_eq!(arg_after(&args, "-c:v"), "h264_videotoolbox");
-        assert_eq!(arg_after(&args, "-q:v"), "75");
+        assert_eq!(
+            arg_after(&args, "-b:v"),
+            "4000000",
+            "quality 50 keeps the source bitrate"
+        );
         assert_eq!(arg_after(&args, "-c:a"), "copy");
         assert!(!args.contains(&"-ss".to_string()));
         assert!(!args.contains(&"-t".to_string()));
@@ -581,27 +701,124 @@ mod tests {
         sp.watermarks = vec![wm("/lib/a.png", f64::NAN, 5.0, f64::INFINITY, -3.0)];
         let f = build_filter_complex(&sp).unwrap();
         assert!(f.contains("max(0,0)"), "{f}");
-        assert!(f.contains("max(0,1920)"), "{f}");
+        // 5.0 of the frame height, far past the edge, is still passed through; the
+        // overlay clamp (not the number) keeps it inside.
+        assert!(f.contains("max(0,9600)"), "{f}");
         assert!(f.contains("colorchannelmixer=aa=0"), "{f}");
     }
 
     #[test]
-    fn watermark_width_is_even_and_never_wider_than_the_frame() {
+    fn watermark_width_is_even_and_capped() {
         assert_eq!(watermark_width(0.2, 1080), 216);
         assert_eq!(watermark_width(0.333, 1001), 334);
-        assert_eq!(watermark_width(5.0, 1000), 1000);
+        assert_eq!(watermark_width(5.0, 1000), 5000);
+        assert_eq!(watermark_width(99.0, 1000), 8192, "capped");
         assert_eq!(watermark_width(0.0, 1000), 10);
     }
 
     #[test]
-    fn libx264_fallback_maps_quality_to_crf() {
+    fn quality_scales_the_bitrate_around_the_source() {
         let mut sp = spec();
-        sp.quality = 100;
-        let a = build_export_args(&sp, Encoder::Libx264).unwrap();
-        assert_eq!(arg_after(&a, "-crf"), "4");
-        sp.quality = 1;
-        let a = build_export_args(&sp, Encoder::Libx264).unwrap();
-        assert_eq!(arg_after(&a, "-crf"), "33");
+        for (q, want) in [
+            (50, 4_000_000),
+            (75, 8_000_000),
+            (25, 2_000_000),
+            (100, 16_000_000),
+            (1, 1_000_000),
+        ] {
+            sp.quality = q;
+            let got = target_bitrate(&sp) as f64;
+            assert!((got / want as f64 - 1.0).abs() < 0.06, "q={q}: {got} vs {want}");
+        }
+    }
+
+    #[test]
+    fn cropping_lowers_the_bitrate_and_an_unknown_source_gets_a_sane_guess() {
+        let mut sp = spec();
+        sp.crop = Some(CropRect {
+            x: 0,
+            y: 0,
+            w: 540,
+            h: 960,
+        }); // a quarter of the area
+        let cropped = target_bitrate(&sp);
+        assert!(cropped < 2_000_000 && cropped > 1_000_000, "{cropped}");
+        sp.crop = None;
+        sp.source_bitrate = None;
+        let guess = target_bitrate(&sp);
+        assert!((4_000_000..7_000_000).contains(&guess), "{guess}"); // 0.09 * 1080*1920 * 30
+    }
+
+    #[test]
+    fn bitrate_is_clamped_and_estimate_follows_duration() {
+        let mut sp = spec();
+        sp.source_bitrate = Some(1);
+        assert_eq!(target_bitrate(&sp), 300_000);
+        sp.source_bitrate = Some(900_000_000);
+        assert_eq!(target_bitrate(&sp), 60_000_000);
+        sp.source_bitrate = Some(4_000_000);
+        // 10 s of 4 Mbit/s video + 128 kbit/s audio
+        assert_eq!(
+            estimate_bytes(&sp),
+            ((4_000_000.0 + 128_000.0) * 10.0 / 8.0) as u64
+        );
+        sp.trim_start = Some(0.0);
+        sp.trim_end = Some(5.0);
+        assert_eq!(
+            estimate_bytes(&sp),
+            ((4_000_000.0 + 128_000.0) * 5.0 / 8.0) as u64
+        );
+    }
+
+    #[test]
+    fn both_encoders_are_bitrate_driven() {
+        let sp = spec();
+        let vt = build_export_args(&sp, Encoder::VideoToolbox).unwrap();
+        assert!(!vt.contains(&"-q:v".to_string()));
+        let x264 = build_export_args(&sp, Encoder::Libx264).unwrap();
+        assert_eq!(arg_after(&x264, "-b:v"), "4000000");
+        assert_eq!(arg_after(&x264, "-maxrate"), "8000000");
+    }
+
+    #[test]
+    fn watermark_content_box_lets_transparent_margin_leave_the_frame() {
+        let mut sp = spec();
+        let mut w = wm("/lib/logo.png", -0.1, 0.5, 0.5, 1.0);
+        w.content = ContentBox {
+            l: 0.2,
+            t: 0.0,
+            r: 0.9,
+            b: 1.0,
+        };
+        sp.watermarks = vec![w];
+        let f = build_filter_complex(&sp).unwrap();
+        // x may go as low as -0.2 image widths, and the content's right edge (0.9)
+        // must stay inside the frame.
+        assert!(
+            f.contains("x='min(max(-0.2*overlay_w,-108),main_w-0.9*overlay_w)'"),
+            "{f}"
+        );
+        assert!(f.contains("y='min(max(0,960),main_h-overlay_h)'"), "{f}");
+    }
+
+    #[test]
+    fn bad_content_boxes_fall_back_to_the_whole_image() {
+        let b = ContentBox {
+            l: 0.5,
+            t: 0.0,
+            r: 0.5,
+            b: 1.0,
+        }
+        .sanitized();
+        assert_eq!(b, ContentBox::default());
+        let nan = ContentBox {
+            l: f64::NAN,
+            t: 0.0,
+            r: 1.0,
+            b: 1.0,
+        }
+        .sanitized();
+        assert_eq!(nan, ContentBox::default());
     }
 
     #[test]

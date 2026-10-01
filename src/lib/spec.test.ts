@@ -5,14 +5,14 @@ import type { VideoState } from "../store";
 function video(over: Partial<VideoState> = {}): VideoState {
   return {
     path: "/in/a.mov",
-    info: { width: 1080, height: 1920, duration: 10, fps: 30, videoCodec: "h264", hasAudio: true, audioCodec: "aac" },
+    info: { width: 1080, height: 1920, duration: 10, fps: 30, bitrate: 3_000_000, videoCodec: "h264", hasAudio: true, audioCodec: "aac" },
     playUrl: "asset://x",
     crop: { x: 0, y: 0, w: 1080, h: 1920 },
     aspect: "free",
     trimStart: 0,
     trimEnd: 10,
     watermarks: [],
-    quality: 75,
+    quality: 60,
     ...over,
   };
 }
@@ -36,7 +36,7 @@ describe("buildExportSpec", () => {
 
   it("treats an odd-sized full frame as untouched", () => {
     const v = video({
-      info: { width: 607, height: 495, duration: 9.7, fps: 30, videoCodec: "h264", hasAudio: false, audioCodec: null },
+      info: { width: 607, height: 495, duration: 9.7, fps: 30, bitrate: null, videoCodec: "h264", hasAudio: false, audioCodec: null },
       crop: { x: 0, y: 0, w: 606, h: 494 },
       trimEnd: 9.7,
     });
@@ -47,11 +47,13 @@ describe("buildExportSpec", () => {
     const s = buildExportSpec(
       video({
         watermarks: [
-          { id: "1", name: "logo", fileName: "1.png", aspect: 0.5, nx: 0.7, ny: 0.8, scale: 0.2, opacity: 0.6, path: "/lib/1.png", url: "asset://1" },
+          { id: "1", name: "logo", fileName: "1.png", aspect: 0.5, content: { l: 0.1, t: 0, r: 0.9, b: 1 }, text: null, nx: 0.7, ny: 0.8, scale: 0.2, opacity: 0.6, path: "/lib/1.png", url: "asset://1" },
         ],
       }),
       "/o.mp4",
     );
-    expect(s.watermarks).toEqual([{ path: "/lib/1.png", nx: 0.7, ny: 0.8, scale: 0.2, opacity: 0.6 }]);
+    expect(s.watermarks).toEqual([{ path: "/lib/1.png", nx: 0.7, ny: 0.8, scale: 0.2, opacity: 0.6, content: { l: 0.1, t: 0, r: 0.9, b: 1 } }]);
+    expect(s.sourceBitrate).toBe(3_000_000);
+    expect(s.fps).toBe(30);
   });
 });

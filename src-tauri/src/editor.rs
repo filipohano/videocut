@@ -151,25 +151,41 @@ pub async fn make_preview<R: Runtime>(
     Ok(out.to_string_lossy().into_owned())
 }
 
-/// Suggest `<export dir or source dir>/<name>-cut.mp4`, never clobbering a file.
+/// The folder finished exports go to (shown in Settings).
 #[tauri::command]
-pub fn default_save_path(state: State<'_, AppState>, source: String) -> String {
-    let src = Path::new(&source);
-    let settings = state.settings();
-    let dir = settings
-        .export_dir
-        .map(PathBuf::from)
-        .filter(|d| d.is_dir())
-        .or_else(|| src.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("."));
-    let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
-    let mut candidate = dir.join(format!("{stem}-cut.mp4"));
-    let mut n = 2;
-    while candidate.exists() {
-        candidate = dir.join(format!("{stem}-cut-{n}.mp4"));
-        n += 1;
+pub fn export_dir<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> String {
+    crate::dirs::finished_dir(&app, &state)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// A fresh timestamp-named path in the finished folder, e.g.
+/// `~/Movies/FillernCut/Finished/2026-10-01_15-42-07.mp4`. Never an existing file.
+#[tauri::command]
+pub fn default_save_path<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let dir = crate::dirs::finished_dir(&app, &state);
+    crate::dirs::new_video_path(&dir)
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|e| format!("Can't create the folder {}: {e}", dir.display()))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Estimate {
+    pub video_bitrate: u64,
+    pub bytes: u64,
+}
+
+/// Predicted output size for the current edit and quality (cheap; no encoding).
+#[tauri::command]
+pub fn estimate_export(spec: ExportSpec) -> Estimate {
+    Estimate {
+        video_bitrate: fillerncut_core::export::target_bitrate(&spec),
+        bytes: fillerncut_core::export::estimate_bytes(&spec),
     }
-    candidate.to_string_lossy().into_owned()
 }
 
 #[tauri::command]
@@ -187,6 +203,10 @@ pub async fn export_video<R: Runtime>(
         }
     }
     let final_out = PathBuf::from(&spec.output);
+    if let Some(parent) = final_out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Can't create the folder {}: {e}", parent.display()))?;
+    }
     if final_out
         .extension()
         .and_then(|e| e.to_str())

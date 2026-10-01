@@ -7,8 +7,16 @@ Download, crop, trim and watermark videos on your Mac — everything runs locall
   **photo posts** are built into a 1080×1920 video with their sound.
 - **Editor** with a large live preview: drag-to-crop with aspect-ratio presets, trim in/out, and an exact
   "what you see is what you get" export.
-- **Watermark library.** Upload a logo once and it's in the **Add watermark ▾** drop-down every time you open
-  the app. Use several at once; each remembers its own position, size and opacity.
+- **Watermark library.** Upload a logo once, or **add text** (any installed font, bold/italic, colour, outline,
+  shadow), and it's in the **Add watermark ▾** drop-down every time you open the app. Use several at once; each
+  remembers its own position, size and opacity. Drag them anywhere in the preview, even so a PNG's transparent
+  margin hangs outside the picture. The visible part always stays inside the frame.
+- **Tidy folders.** Downloads land in `~/Movies/FillernCut/Footage`, finished exports in
+  `~/Movies/FillernCut/Finished`, all named by date and time (`2026-10-01_15-42-07.mp4`) so they sort
+  chronologically. Both folders, and "ask where to save", are in Settings.
+- **Sensible file sizes.** The export aims for the original's bitrate (adjusted for crop and the quality slider)
+  instead of a fixed high quality, and shows the expected size before you export.
+- **Preview volume** slider in the player bar (only affects what you hear in the app, never the export).
 - **Fast export**: H.264 on the Apple-silicon media engine (VideoToolbox) with a quality slider, and an
   automatic CPU fallback if the hardware encoder ever refuses a file.
 - **Updates from GitHub**: checks on every launch, shows an *out of date* banner, and can install new versions

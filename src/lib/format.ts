@@ -52,3 +52,17 @@ export function stem(path: string): string {
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(0, dot) : name;
 }
+
+/** `3_100_000` → `"3.1 MB"` */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "—";
+  if (bytes < 1000) return `${Math.round(bytes)} B`;
+  const units = ["kB", "MB", "GB"];
+  let v = bytes;
+  let i = -1;
+  do {
+    v /= 1000;
+    i++;
+  } while (v >= 1000 && i < units.length - 1);
+  return `${v >= 100 ? Math.round(v) : v.toFixed(v >= 10 ? 0 : 1)} ${units[i]}`;
+}

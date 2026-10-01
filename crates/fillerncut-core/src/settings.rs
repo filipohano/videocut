@@ -49,12 +49,14 @@ pub struct Settings {
     pub auto_update_ytdlp: bool,
     /// Optional: let the downloader borrow the login from a browser.
     pub cookies_browser: Option<CookieBrowser>,
-    /// Where downloads are saved. `None` = ~/Movies/FillernCut.
+    /// Where downloaded (raw) footage is saved. `None` = ~/Movies/FillernCut/Footage.
     pub download_dir: Option<String>,
-    /// Default folder for the export dialog. `None` = next to the source file.
+    /// Where finished exports go. `None` = ~/Movies/FillernCut/Finished.
     pub export_dir: Option<String>,
-    /// Last used export quality (1..=100).
-    pub quality: u8,
+    /// Show a save dialog for every export instead of saving straight to the finished folder.
+    pub ask_export_location: bool,
+    /// Last used export quality (1..=100); 50 ≈ the source's own bitrate.
+    pub export_quality: u8,
 }
 
 impl Default for Settings {
@@ -65,7 +67,8 @@ impl Default for Settings {
             cookies_browser: None,
             download_dir: None,
             export_dir: None,
-            quality: 75,
+            ask_export_location: false,
+            export_quality: 60,
         }
     }
 }
@@ -82,7 +85,7 @@ impl Settings {
     }
 
     pub fn sanitized(mut self) -> Settings {
-        self.quality = self.quality.clamp(1, 100);
+        self.export_quality = self.export_quality.clamp(1, 100);
         self
     }
 
@@ -121,7 +124,7 @@ mod tests {
             update_mode: UpdateMode::Notify,
             cookies_browser: Some(CookieBrowser::Safari),
             download_dir: Some("/Users/me/Movies".into()),
-            quality: 90,
+            export_quality: 90,
             ..Settings::default()
         };
         s.save(&path).unwrap();
@@ -144,7 +147,7 @@ mod tests {
         fs::write(&path, r#"{"updateMode":"manual"}"#).unwrap();
         let s = Settings::load(&path);
         assert_eq!(s.update_mode, UpdateMode::Manual);
-        assert_eq!(s.quality, 75);
+        assert_eq!(s.export_quality, 60);
         assert!(s.auto_update_ytdlp);
     }
 
@@ -152,17 +155,17 @@ mod tests {
     fn quality_is_clamped() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        fs::write(&path, r#"{"quality":0}"#).unwrap();
-        assert_eq!(Settings::load(&path).quality, 1);
-        fs::write(&path, r#"{"quality":250}"#).unwrap();
-        assert_eq!(Settings::load(&path).quality, 100);
+        fs::write(&path, r#"{"exportQuality":0}"#).unwrap();
+        assert_eq!(Settings::load(&path).export_quality, 1);
+        fs::write(&path, r#"{"exportQuality":250}"#).unwrap();
+        assert_eq!(Settings::load(&path).export_quality, 100);
     }
 
     #[test]
     fn json_shape_matches_what_the_frontend_sends() {
         let s: Settings = serde_json::from_str(
             r#"{"updateMode":"auto","autoUpdateYtdlp":false,"cookiesBrowser":"chrome",
-                "downloadDir":null,"exportDir":"/x","quality":60}"#,
+                "downloadDir":null,"exportDir":"/x","exportQuality":60}"#,
         )
         .unwrap();
         assert!(!s.auto_update_ytdlp);

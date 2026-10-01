@@ -1,4 +1,5 @@
 mod bins;
+mod dirs;
 mod download;
 mod editor;
 mod jobs;
@@ -23,6 +24,10 @@ pub fn register_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         editor::open_url,
         download::download_link,
         download::download_dir,
+        editor::export_dir,
+        editor::estimate_export,
+        library::library_add_text,
+        library::library_replace_text,
         library::library_list,
         library::library_add,
         library::library_update,

@@ -11,9 +11,30 @@ export interface MediaInfo {
   height: number;
   duration: number;
   fps: number | null;
+  /** video bitrate, bits/s */
+  bitrate: number | null;
   videoCodec: string | null;
   hasAudio: boolean;
   audioCodec: string | null;
+}
+
+export interface ContentBox {
+  l: number;
+  t: number;
+  r: number;
+  b: number;
+}
+
+export interface TextStyle {
+  text: string;
+  fontFamily: string;
+  bold: boolean;
+  italic: boolean;
+  color: string;
+  outline: boolean;
+  outlineColor: string;
+  shadow: boolean;
+  align: "left" | "center" | "right";
 }
 
 export interface WatermarkEntry {
@@ -22,6 +43,10 @@ export interface WatermarkEntry {
   fileName: string;
   /** image height / width */
   aspect: number;
+  /** where the visible (non-transparent) part sits inside the image */
+  content: ContentBox;
+  /** set for text watermarks */
+  text: TextStyle | null;
   nx: number;
   ny: number;
   scale: number;
@@ -43,7 +68,8 @@ export interface Settings {
   cookiesBrowser: CookieBrowser | null;
   downloadDir: string | null;
   exportDir: string | null;
-  quality: number;
+  askExportLocation: boolean;
+  exportQuality: number;
 }
 
 export interface AppInfo {
@@ -69,8 +95,16 @@ export interface ExportSpec {
   crop: { x: number; y: number; w: number; h: number } | null;
   trimStart: number | null;
   trimEnd: number | null;
-  watermarks: { path: string; nx: number; ny: number; scale: number; opacity: number }[];
+  watermarks: { path: string; nx: number; ny: number; scale: number; opacity: number; content: ContentBox }[];
+  sourceBitrate: number | null;
+  fps: number | null;
+  /** 1..100; 50 ≈ the source's own bitrate */
   quality: number;
+}
+
+export interface Estimate {
+  videoBitrate: number;
+  bytes: number;
 }
 
 export interface JobProgress {
@@ -93,7 +127,9 @@ export const api = {
   probeMedia: (path: string) => invoke<MediaInfo>("probe_media", { path }),
   makePreview: (path: string, hasAudio: boolean, duration: number) =>
     invoke<string>("make_preview", { path, hasAudio, duration }),
-  defaultSavePath: (source: string) => invoke<string>("default_save_path", { source }),
+  defaultSavePath: () => invoke<string>("default_save_path"),
+  exportDir: () => invoke<string>("export_dir"),
+  estimateExport: (spec: ExportSpec) => invoke<Estimate>("estimate_export", { spec }),
   exportVideo: (spec: ExportSpec) => invoke<string>("export_video", { spec }),
   cancelJob: (job: string) => invoke<void>("cancel_job", { job }),
   revealInFinder: (path: string) => invoke<void>("reveal_in_finder", { path }),
@@ -107,6 +143,9 @@ export const api = {
   libraryUpdate: (id: string, patch: WatermarkPatch) =>
     invoke<WatermarkEntry>("library_update", { id, patch }),
   libraryRemove: (id: string) => invoke<void>("library_remove", { id }),
+  libraryAddText: (pngBase64: string, style: TextStyle) => invoke<WatermarkEntry>("library_add_text", { pngBase64, style }),
+  libraryReplaceText: (id: string, pngBase64: string, style: TextStyle) =>
+    invoke<WatermarkEntry>("library_replace_text", { id, pngBase64, style }),
 
   getSettings: () => invoke<Settings>("get_settings"),
   saveSettings: (settings: Settings) => invoke<Settings>("save_settings", { settings }),

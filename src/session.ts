@@ -68,7 +68,7 @@ export async function openVideo(path: string): Promise<boolean> {
       trimStart: 0,
       trimEnd: info.duration,
       watermarks: [],
-      quality: store.settings.quality,
+      quality: store.settings.exportQuality,
     };
     store.selectedWatermark = null;
     $("#source-name").textContent = `${basename(path)} · ${info.width}×${info.height} · ${info.videoCodec ?? "video"}${info.hasAudio ? "" : " · no audio"}`;

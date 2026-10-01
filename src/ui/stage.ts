@@ -5,8 +5,8 @@
  */
 import { MIN_CROP, evenRect, moveRect, ratioValue, resizeRect, type Handle, type Rect } from "../lib/crop";
 import { clamp, formatClock } from "../lib/format";
-import { reclampAll, select, updateActive } from "../watermarkOps";
-import { MIN_SCALE } from "../lib/watermarks";
+import { moveTo, reclampAll, select, setScaleKeepingCorner } from "../watermarkOps";
+import { MIN_SCALE, heightFraction } from "../lib/watermarks";
 import { store, type ActiveWatermark } from "../store";
 import { $, h, raf } from "./dom";
 
@@ -35,6 +35,8 @@ export function initStage(): Stage {
   const seek = $<HTMLInputElement>("#seek");
   const clock = $("#clock");
   const trimRange = $("#trim-range");
+  const volume = $<HTMLInputElement>("#volume");
+  const muteBtn = $("#btn-mute");
 
   /** Stage pixels per source pixel. */
   let k = 1;
@@ -117,6 +119,10 @@ export function initStage(): Stage {
 
   // ───────── watermark overlay ─────────
   const wmEls = new Map<string, { el: HTMLElement; img: HTMLImageElement }>();
+  // One resize grip for the selected watermark, in the (unclipped) handle layer.
+  const grip = h("div", { class: "wm-grip hidden", title: "Drag to resize" });
+  handleLayer.append(grip);
+  grip.addEventListener("pointerdown", (e) => startGripDrag(e));
 
   function renderWatermarks(): void {
     const list = store.video?.watermarks ?? [];
@@ -127,14 +133,16 @@ export function initStage(): Stage {
         wmEls.delete(id);
       }
     for (const wm of list) {
-      if (wmEls.has(wm.id)) continue;
+      const existing = wmEls.get(wm.id);
+      if (existing) {
+        if (existing.img.getAttribute("src") !== wm.url) existing.img.src = wm.url;
+        continue;
+      }
       const img = h("img", { src: wm.url, alt: wm.name, draggable: false });
-      const grip = h("span", { class: "wm-resize" });
-      const el = h("div", { class: "wm", "data-id": wm.id }, img, grip);
-      el.addEventListener("pointerdown", (e) => {
-        if (e.target === grip) startWmResize(e, wm.id);
-        else startWmDrag(e, wm.id, el);
-      });
+      // Outline of the visible content (the image may have transparent margins).
+      const box = h("span", { class: "wm-box" });
+      const el = h("div", { class: "wm", "data-id": wm.id }, img, box);
+      el.addEventListener("pointerdown", (e) => startWmDrag(e, wm.id, el));
       wmLayer.append(el);
       wmEls.set(wm.id, { el, img });
     }
@@ -153,10 +161,7 @@ export function initStage(): Stage {
     const sy = e.clientY;
     const { nx, ny } = wm;
     const onMove = (ev: PointerEvent) => {
-      updateActive(id, {
-        nx: nx + (ev.clientX - sx) / k / v.crop.w,
-        ny: ny + (ev.clientY - sy) / k / v.crop.h,
-      });
+      moveTo(id, nx + (ev.clientX - sx) / k / v.crop.w, ny + (ev.clientY - sy) / k / v.crop.h);
     };
     const onUp = () => {
       el.classList.remove("dragging");
@@ -169,19 +174,20 @@ export function initStage(): Stage {
     el.addEventListener("pointercancel", onUp);
   }
 
-  function startWmResize(e: PointerEvent, id: string): void {
+  function startGripDrag(e: PointerEvent): void {
     const v = store.video;
+    const id = store.selectedWatermark;
     const wm = v?.watermarks.find((w) => w.id === id);
-    if (!v || !wm || e.button !== 0) return;
+    if (!v || !id || !wm || e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    const grip = e.target as HTMLElement;
     grip.setPointerCapture(e.pointerId);
     const sx = e.clientX;
-    const startScale = wm.scale;
+    const startContentW = wm.scale * (wm.content.r - wm.content.l);
+    const contentFrac = Math.max(0.01, wm.content.r - wm.content.l);
     const onMove = (ev: PointerEvent) => {
-      const dScale = (ev.clientX - sx) / k / v.crop.w;
-      updateActive(id, { scale: Math.max(MIN_SCALE, startScale + dScale) });
+      const contentW = Math.max(MIN_SCALE * contentFrac, startContentW + (ev.clientX - sx) / k / v.crop.w);
+      setScaleKeepingCorner(id, contentW / contentFrac);
     };
     const onUp = () => {
       grip.removeEventListener("pointermove", onMove);
@@ -208,6 +214,20 @@ export function initStage(): Stage {
     el.style.width = `${wm.scale * crop.w * k}px`;
     el.style.opacity = String(wm.opacity);
     el.classList.toggle("selected", store.selectedWatermark === wm.id);
+    const box = el.querySelector<HTMLElement>(".wm-box")!;
+    box.style.left = `${wm.content.l * 100}%`;
+    box.style.top = `${wm.content.t * 100}%`;
+    box.style.width = `${(wm.content.r - wm.content.l) * 100}%`;
+    box.style.height = `${(wm.content.b - wm.content.t) * 100}%`;
+  }
+
+  function layoutGrip(crop: Rect): void {
+    const wm = store.video?.watermarks.find((w) => w.id === store.selectedWatermark);
+    grip.classList.toggle("hidden", !wm);
+    if (!wm) return;
+    const hFrac = heightFraction(wm.scale, wm.aspect, crop);
+    grip.style.left = `${(crop.x + (wm.nx + wm.content.r * wm.scale) * crop.w) * k}px`;
+    grip.style.top = `${(crop.y + (wm.ny + wm.content.b * hFrac) * crop.h) * k}px`;
   }
 
   function layout(): void {
@@ -245,7 +265,10 @@ export function initStage(): Stage {
       el.style.left = `${pos[name][0] * k}px`;
       el.style.top = `${pos[name][1] * k}px`;
     }
+    // Watermarks are only visible inside the crop, exactly as in the export.
+    wmLayer.style.clipPath = `inset(${c.y * k}px ${(f.w - c.x - c.w) * k}px ${(f.h - c.y - c.h) * k}px ${c.x * k}px)`;
     v.watermarks.forEach((wm) => layoutWatermark(wm, c));
+    layoutGrip(c);
   }
 
   store.on(["crop", "watermarks", "selection"], raf(layout));
@@ -296,6 +319,42 @@ export function initStage(): Stage {
   seek.addEventListener("input", () => {
     if (duration > 0) video.currentTime = (Number(seek.value) / 1000) * duration;
   });
+
+  // ───────── app volume (preview only — never changes the exported video) ─────────
+  const VOLUME_KEY = "fillerncut.volume";
+  const stored = (() => {
+    try {
+      return JSON.parse(localStorage.getItem(VOLUME_KEY) ?? "null") as { level: number; muted: boolean } | null;
+    } catch {
+      return null;
+    }
+  })();
+  let level = clamp(stored?.level ?? 0.8, 0, 1);
+  let muted = stored?.muted ?? false;
+  function applyVolume(save = true): void {
+    video.volume = level;
+    video.muted = muted || level === 0;
+    volume.value = String(Math.round(level * 100));
+    muteBtn.classList.toggle("muted", video.muted);
+    muteBtn.setAttribute("aria-label", video.muted ? "Unmute preview" : "Mute preview");
+    if (save)
+      try {
+        localStorage.setItem(VOLUME_KEY, JSON.stringify({ level, muted }));
+      } catch {
+        /* storage unavailable — the setting just won't persist */
+      }
+  }
+  volume.addEventListener("input", () => {
+    level = Number(volume.value) / 100;
+    if (level > 0) muted = false;
+    applyVolume();
+  });
+  muteBtn.addEventListener("click", () => {
+    if (level === 0) level = 0.8;
+    muted = !video.muted;
+    applyVolume();
+  });
+  applyVolume(false);
 
   store.on("video", () => {
     const v = store.video;

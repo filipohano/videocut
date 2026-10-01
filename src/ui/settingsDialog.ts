@@ -123,37 +123,42 @@ export function initSettingsDialog(): void {
     cookies.value = s.cookiesBrowser ?? "";
     cookies.addEventListener("change", () => void save({ cookiesBrowser: (cookies.value || null) as CookieBrowser | null }));
 
-    const dlPath = h("span", { class: "path grow" }, s.downloadDir ?? "~/Movies/FillernCut");
-    api.downloadDir().then((d) => !s.downloadDir && (dlPath.textContent = d)).catch(() => {});
-    const dlChoose = h("button", { class: "btn small" }, "Choose…");
-    dlChoose.addEventListener("click", async () => {
-      const dir = await pickFolder();
-      if (dir) {
-        await save({ downloadDir: dir });
-        dlPath.textContent = dir;
-      }
-    });
-    const dlReset = h("button", { class: "btn small" }, "Reset");
-    dlReset.addEventListener("click", async () => {
-      await save({ downloadDir: null });
-      dlPath.textContent = await api.downloadDir();
-    });
-
-    // ───────── export ─────────
-    const exPath = h("span", { class: "path grow" }, s.exportDir ?? "Same folder as the source video");
-    const exChoose = h("button", { class: "btn small" }, "Choose…");
-    exChoose.addEventListener("click", async () => {
-      const dir = await pickFolder();
-      if (dir) {
-        await save({ exportDir: dir });
-        exPath.textContent = dir;
-      }
-    });
-    const exReset = h("button", { class: "btn small" }, "Reset");
-    exReset.addEventListener("click", async () => {
-      await save({ exportDir: null });
-      exPath.textContent = "Same folder as the source video";
-    });
+    // ───────── folders ─────────
+    const folderRow = (label: string, hint: string, current: string | null, resolve: () => Promise<string>, key: "downloadDir" | "exportDir") => {
+      const path = h("span", { class: "path grow" }, current ?? "…");
+      if (!current) resolve().then((d) => (path.textContent = d)).catch(() => {});
+      const choose = h("button", { class: "btn small" }, "Choose…");
+      choose.addEventListener("click", async () => {
+        const dir = await pickFolder();
+        if (dir) {
+          await save({ [key]: dir });
+          path.textContent = dir;
+        }
+      });
+      const reset = h("button", { class: "btn small" }, "Reset");
+      reset.addEventListener("click", async () => {
+        await save({ [key]: null });
+        path.textContent = await resolve();
+      });
+      return h(
+        "div",
+        { class: "folder" },
+        h("div", { class: "folder-label" }, h("strong", {}, label), h("span", { class: "muted small" }, hint)),
+        h("div", { class: "set-row" }, path, choose, reset),
+      );
+    };
+    const footageRow = folderRow("Raw footage", "Downloaded videos land here, untouched.", s.downloadDir, api.downloadDir, "downloadDir");
+    const finishedRow = folderRow("Finished videos", "Exports land here. Files are named by date and time, e.g. 2026-10-01_15-42-07.mp4.", s.exportDir, api.exportDir, "exportDir");
+    const askRow = h(
+      "label",
+      { class: "check" },
+      h("input", {
+        type: "checkbox",
+        checked: s.askExportLocation,
+        onchange: (e: Event) => void save({ askExportLocation: (e.target as HTMLInputElement).checked }),
+      }),
+      h("span", {}, "Ask where to save every export", h("br"), h("span", { class: "muted small" }, "Off: exports go straight to the Finished folder.")),
+    );
 
     dialog.replaceChildren(
       h(
@@ -199,14 +204,8 @@ export function initSettingsDialog(): void {
             { class: "muted small", style: { margin: "0" } },
             "Instagram (and some X posts) need you to be logged in. Pick the browser you're logged into; cookies are only read locally by the downloader and never leave your Mac. Safari needs Full Disk Access for FillernCut (System Settings → Privacy & Security).",
           ),
-          h("div", { class: "set-row" }, h("span", { class: "muted small" }, "Save downloads to"), dlPath, dlChoose, dlReset),
         ),
-        h(
-          "section",
-          { class: "set-section" },
-          h("h3", {}, "Export"),
-          h("div", { class: "set-row" }, h("span", { class: "muted small" }, "Default folder"), exPath, exChoose, exReset),
-        ),
+        h("section", { class: "set-section" }, h("h3", {}, "Folders"), footageRow, finishedRow, askRow),
         h(
           "section",
           { class: "set-section" },

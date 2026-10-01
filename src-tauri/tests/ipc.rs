@@ -25,9 +25,9 @@ fn settings_roundtrip_with_frontend_json_shape() {
     let mut s = defaults.clone();
     s["updateMode"] = json!("notify");
     s["cookiesBrowser"] = json!("safari");
-    s["quality"] = json!(250); // out of range → clamped
+    s["exportQuality"] = json!(250); // out of range → clamped
     let saved = call(&h.win, "save_settings", json!({ "settings": s })).unwrap();
-    assert_eq!(saved["quality"], 100);
+    assert_eq!(saved["exportQuality"], 100);
     let again = call(&h.win, "get_settings", json!({})).unwrap();
     assert_eq!(again["updateMode"], "notify");
     assert_eq!(again["cookiesBrowser"], "safari");
@@ -198,8 +198,8 @@ fn cancelling_an_export_stops_ffmpeg_and_leaves_no_files() {
     assert!(!h.dir.path().join("cancelled.partial.mp4").exists());
 
     // The job slot is released, so exporting again works.
-    let ok = call(&h.win, "default_save_path", json!({ "source": src })).unwrap();
-    assert!(ok.as_str().unwrap().ends_with("long-cut.mp4"));
+    let ok = call(&h.win, "default_save_path", json!({})).unwrap();
+    assert!(ok.as_str().unwrap().ends_with(".mp4"));
 }
 
 #[test]
@@ -222,15 +222,114 @@ fn preview_proxy_is_made_once_and_cached() {
 }
 
 #[test]
-fn default_save_path_never_clobbers() {
+fn exports_get_a_fresh_timestamp_name_in_the_finished_folder() {
     let Some(h) = harness() else { return };
-    let src = h.dir.path().join("clip.mov");
-    std::fs::write(&src, b"x").unwrap();
-    let first = call(&h.win, "default_save_path", json!({ "source": src })).unwrap();
-    assert!(first.as_str().unwrap().ends_with("clip-cut.mp4"));
-    std::fs::write(h.dir.path().join("clip-cut.mp4"), b"x").unwrap();
-    let second = call(&h.win, "default_save_path", json!({ "source": src })).unwrap();
-    assert!(second.as_str().unwrap().ends_with("clip-cut-2.mp4"));
+    let finished = h.dir.path().join("finished");
+    let mut s = call(&h.win, "get_settings", json!({})).unwrap();
+    s["exportDir"] = json!(finished);
+    call(&h.win, "save_settings", json!({ "settings": s })).unwrap();
+
+    let first = call(&h.win, "default_save_path", json!({})).unwrap();
+    let first = PathBuf::from(first.as_str().unwrap());
+    assert_eq!(first.parent().unwrap(), finished);
+    assert!(first.extension().unwrap() == "mp4");
+    assert!(finished.is_dir(), "the folder is created on demand");
+    assert_eq!(call(&h.win, "export_dir", json!({})).unwrap(), json!(finished));
+
+    // Same second, same name taken -> a numbered sibling, never an overwrite.
+    std::fs::write(&first, b"x").unwrap();
+    let second = call(&h.win, "default_save_path", json!({})).unwrap();
+    assert_ne!(PathBuf::from(second.as_str().unwrap()), first);
+}
+
+#[test]
+fn export_creates_the_target_folder_and_reports_a_size_estimate() {
+    let Some(h) = harness() else { return };
+    let src = make_video(h.dir.path(), "src.mp4", "320x240", 2);
+    let out = h
+        .dir
+        .path()
+        .join("new/sub/out.mp4")
+        .to_string_lossy()
+        .into_owned();
+    let spec = json!({
+        "input": src, "output": out, "sourceWidth": 320, "sourceHeight": 240, "sourceDuration": 2.0,
+        "hasAudio": true, "audioCodec": "aac", "crop": null, "trimStart": null, "trimEnd": null,
+        "watermarks": [], "sourceBitrate": 1_000_000, "fps": 30.0, "quality": 50 });
+    let est = call(&h.win, "estimate_export", json!({ "spec": spec })).unwrap();
+    assert_eq!(est["videoBitrate"], 1_000_000);
+    assert_eq!(
+        est["bytes"],
+        json!(((1_000_000.0 + 128_000.0) * 2.0 / 8.0) as u64)
+    );
+    call(&h.win, "export_video", json!({ "spec": spec })).unwrap();
+    assert!(Path::new(&out).is_file());
+}
+
+#[test]
+fn text_watermarks_round_trip_through_the_library_commands() {
+    let Some(h) = harness() else { return };
+    // 40x20 PNG: opaque 20x10 block in the middle.
+    let mut img = image::RgbaImage::from_pixel(40, 20, image::Rgba([0, 0, 0, 0]));
+    for y in 5..15 {
+        for x in 10..30 {
+            img.put_pixel(x, y, image::Rgba([255, 255, 255, 255]));
+        }
+    }
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let b64 = base64_encode(&png);
+    let style = json!({ "text": "Hi there", "fontFamily": "Impact", "bold": true, "italic": false,
+        "color": "#ffcc00", "outline": true, "outlineColor": "#000000", "shadow": false, "align": "center" });
+
+    let e = call(
+        &h.win,
+        "library_add_text",
+        json!({ "pngBase64": b64, "style": style }),
+    )
+    .unwrap();
+    assert_eq!(e["name"], "Hi there");
+    assert_eq!(e["text"]["fontFamily"], "Impact");
+    assert_eq!(
+        e["content"],
+        json!({ "l": 0.25, "t": 0.25, "r": 0.75, "b": 0.75 })
+    );
+    let id = e["id"].as_str().unwrap();
+
+    let style2 = json!({ "text": "Changed", "fontFamily": "Impact", "bold": false, "italic": true,
+        "color": "#ffffff", "outline": false, "outlineColor": "#000000", "shadow": true, "align": "left" });
+    let e2 = call(
+        &h.win,
+        "library_replace_text",
+        json!({ "id": id, "pngBase64": b64, "style": style2 }),
+    )
+    .unwrap();
+    assert_eq!(e2["name"], "Changed");
+    assert_eq!(e2["text"]["italic"], true);
+    assert!(call(
+        &h.win,
+        "library_add_text",
+        json!({ "pngBase64": "!!!", "style": style2 })
+    )
+    .is_err());
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for c in bytes.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= c.len() {
+                out.push(T[((n >> (18 - 6 * i)) & 63) as usize] as char)
+            } else {
+                out.push('=')
+            }
+        }
+    }
+    out
 }
 
 #[test]

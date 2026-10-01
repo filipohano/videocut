@@ -13,6 +13,8 @@ const FILE_PREFIX: &str = "FCFILE|";
 pub struct DownloadOptions {
     pub url: String,
     pub out_dir: PathBuf,
+    /// File name without extension (a timestamp), chosen by the caller so it is unique.
+    pub file_stem: String,
     /// Directory holding ffmpeg/ffprobe (needed to merge video + audio).
     pub ffmpeg_dir: Option<PathBuf>,
     pub cookies_browser: Option<CookieBrowser>,
@@ -34,7 +36,7 @@ pub fn build_args(opts: &DownloadOptions) -> Vec<String> {
         "mp4".into(),
         "-o".into(),
         opts.out_dir
-            .join("%(extractor)s-%(id)s.%(ext)s")
+            .join(format!("{}.%(ext)s", opts.file_stem))
             .to_string_lossy()
             .into_owned(),
         // `--print` implies --quiet, so progress has to be requested explicitly.
@@ -173,6 +175,7 @@ mod tests {
         DownloadOptions {
             url: "https://x.com/jack/status/20".into(),
             out_dir: "/Users/me/Movies/FillernCut".into(),
+            file_stem: "2026-10-01_15-42-07".into(),
             ffmpeg_dir: Some("/App/Contents/MacOS".into()),
             cookies_browser: None,
         }
@@ -201,7 +204,7 @@ mod tests {
         let o = a.iter().position(|x| x == "-o").unwrap();
         assert_eq!(
             a[o + 1],
-            "/Users/me/Movies/FillernCut/%(extractor)s-%(id)s.%(ext)s"
+            "/Users/me/Movies/FillernCut/2026-10-01_15-42-07.%(ext)s"
         );
         let f = a.iter().position(|x| x == "--ffmpeg-location").unwrap();
         assert_eq!(a[f + 1], "/App/Contents/MacOS");

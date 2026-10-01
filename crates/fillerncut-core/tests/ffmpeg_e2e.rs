@@ -123,7 +123,9 @@ fn spec_for(env: &Env, input: &str, info: &MediaInfo, out_name: &str) -> ExportS
         trim_start: None,
         trim_end: None,
         watermarks: vec![],
-        quality: 75,
+        source_bitrate: info.bitrate,
+        fps: info.fps,
+        quality: 50,
     }
 }
 
@@ -153,6 +155,7 @@ fn crop_trim_and_two_watermarks_export_with_the_right_geometry() {
             ny: 0.8,
             scale: 0.3,
             opacity: 0.5,
+            content: ContentBox::default(),
         },
         // Deliberately placed past the corner: must be clamped inside the frame.
         WatermarkPlacement {
@@ -161,6 +164,7 @@ fn crop_trim_and_two_watermarks_export_with_the_right_geometry() {
             ny: 1.0,
             scale: 0.1,
             opacity: 1.0,
+            content: ContentBox::default(),
         },
     ];
 
@@ -226,6 +230,7 @@ fn watermark_really_lands_inside_the_frame_at_the_requested_spot() {
         ny: 1.0 / 3.0,
         scale: 0.25,
         opacity: 1.0,
+        content: ContentBox::default(),
     }];
     run(&env.ffmpeg, &build_export_args(&spec, env.encoder).unwrap());
 
@@ -309,4 +314,144 @@ fn preview_proxy_plays_back_as_h264_capped_at_720p() {
     assert_eq!(info.height, 720);
     assert_eq!(info.width, 1280);
     assert_eq!(info.video_codec.as_deref(), Some("h264"));
+}
+
+#[test]
+fn transparent_margin_can_hang_outside_while_content_stays_inside() {
+    let Some(env) = env() else {
+        eprintln!("skipping: ffmpeg/ffprobe not available");
+        return;
+    };
+    let black = env.dir.path().join("black.mp4").to_string_lossy().into_owned();
+    run(
+        &env.ffmpeg,
+        &[
+            "-hide_banner",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=400x300:r=10:d=1",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            &black,
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>(),
+    );
+    let info = probe(&env, &black);
+
+    // 200x100 logo whose left 100px are transparent margin: content is the right half.
+    let logo = env.dir.path().join("half.png").to_string_lossy().into_owned();
+    let mut img = image::RgbaImage::from_pixel(200, 100, image::Rgba([0, 0, 0, 0]));
+    for y in 0..100 {
+        for x in 100..200 {
+            img.put_pixel(x, y, image::Rgba([255, 255, 255, 255]));
+        }
+    }
+    img.save(&logo).unwrap();
+
+    let mut spec = spec_for(&env, &black, &info, "hang.mp4");
+    spec.quality = 100;
+    // scale 0.5 -> 200px wide. Ask for x = -1.0 (way left): the margin may hang out
+    // by at most 0.5 image widths (100px), so the white content must land at x = 0.
+    spec.watermarks = vec![WatermarkPlacement {
+        path: logo,
+        nx: -1.0,
+        ny: 0.0,
+        scale: 0.5,
+        opacity: 1.0,
+        content: ContentBox {
+            l: 0.5,
+            t: 0.0,
+            r: 1.0,
+            b: 1.0,
+        },
+    }];
+    run(&env.ffmpeg, &build_export_args(&spec, env.encoder).unwrap());
+
+    let pixel = |x: u32, y: u32| -> u8 {
+        let out = Command::new(&env.ffmpeg)
+            .args([
+                "-v",
+                "error",
+                "-i",
+                &spec.output,
+                "-vf",
+                &format!("format=gray,crop=1:1:{x}:{y}"),
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-",
+            ])
+            .output()
+            .unwrap();
+        out.stdout[0]
+    };
+    assert!(pixel(10, 50) > 200, "content touches the left edge");
+    assert!(pixel(90, 50) > 200);
+    assert!(pixel(150, 50) < 40, "and ends where the 100px content ends");
+}
+
+#[test]
+fn a_watermarked_export_is_not_much_bigger_than_the_source() {
+    let Some(env) = env() else {
+        eprintln!("skipping: ffmpeg/ffprobe not available");
+        return;
+    };
+    // A low-bitrate source, like a downloaded social-media clip.
+    let src = env.dir.path().join("lowrate.mp4").to_string_lossy().into_owned();
+    run(
+        &env.ffmpeg,
+        &[
+            "-hide_banner",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=608x496:rate=30:duration=6",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=6",
+            "-c:v",
+            "libx264",
+            "-b:v",
+            "600k",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "64k",
+            "-shortest",
+            &src,
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>(),
+    );
+    let src_size = std::fs::metadata(&src).unwrap().len();
+    let info = probe(&env, &src);
+    assert!(info.bitrate.is_some());
+
+    let mut spec = spec_for(&env, &src, &info, "wm.mp4");
+    spec.watermarks = vec![WatermarkPlacement {
+        path: logo(&env, "w.png", "200x80", "white"),
+        nx: 0.6,
+        ny: 0.8,
+        scale: 0.3,
+        opacity: 0.8,
+        content: ContentBox::default(),
+    }];
+    run(&env.ffmpeg, &build_export_args(&spec, env.encoder).unwrap());
+    let out_size = std::fs::metadata(&spec.output).unwrap().len();
+    assert!(
+        (out_size as f64) < (src_size as f64) * 2.0,
+        "export {out_size} B vs source {src_size} B should stay within ~2x at default quality"
+    );
 }

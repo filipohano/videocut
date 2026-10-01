@@ -153,6 +153,22 @@ fn collect_progress(h: &Harness) -> Arc<Mutex<Vec<f64>>> {
     seen
 }
 
+/// `<dir>/YYYY-MM-DD_HH-MM-SS.mp4` (optionally `-2`, `-3`… if taken).
+fn assert_timestamp_named(path: &str, dir: &Path) {
+    let p = Path::new(path);
+    assert_eq!(p.parent().unwrap(), dir);
+    let name = p.file_name().unwrap().to_string_lossy().into_owned();
+    let b = name.as_bytes();
+    let pattern = b"dddd-dd-dd_dd-dd-dd";
+    assert!(b.len() >= 23 && b.ends_with(b".mp4"), "{name}");
+    for (i, k) in pattern.iter().enumerate() {
+        match k {
+            b'd' => assert!(b[i].is_ascii_digit(), "{name}"),
+            other => assert_eq!(b[i], *other, "{name}"),
+        }
+    }
+}
+
 fn dims(path: &str) -> (u64, u64, f64) {
     probe_dims(path)
 }
@@ -171,7 +187,7 @@ fn tiktok_video_downloads_without_watermark_via_the_api() {
     let path = res["path"].as_str().unwrap();
     assert_eq!(res["platform"], "tiktok");
     assert_eq!(res["title"], "A video");
-    assert_eq!(Path::new(path), dir.join(format!("tiktok-{VIDEO_ID}.mp4")));
+    assert_timestamp_named(path, &dir);
     assert_eq!(dims(path).0, 720);
 
     let p = progress.lock().unwrap().clone();
@@ -192,7 +208,7 @@ fn tiktok_photo_post_becomes_a_portrait_slideshow_with_sound() {
     let url = format!("https://www.tiktok.com/@someone/photo/{PHOTO_ID}");
     let res = call(&h.win, "download_link", json!({ "url": url })).unwrap();
     let path = res["path"].as_str().unwrap();
-    assert_eq!(Path::new(path), dir.join(format!("tiktok-{PHOTO_ID}.mp4")));
+    assert_timestamp_named(path, &dir);
 
     let (w, hgt, dur) = dims(path);
     assert_eq!((w, hgt), (1080, 1920));
@@ -207,7 +223,10 @@ fn tiktok_photo_post_becomes_a_portrait_slideshow_with_sound() {
         "progress went backwards: {p:?}"
     );
     assert!(!h.dir.path().join(format!("cache/slideshow-{PHOTO_ID}")).exists());
-    assert!(!dir.join(format!("tiktok-{PHOTO_ID}.partial.mp4")).exists());
+    assert!(std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .all(|e| !e.file_name().to_string_lossy().contains("partial")));
 }
 
 #[test]
@@ -384,4 +403,26 @@ fn a_broken_downloader_left_by_an_old_version_is_replaced() {
         !content.contains("Failed to load Python"),
         "the broken copy must not be kept"
     );
+}
+
+#[test]
+fn downloads_go_to_the_footage_folder_and_are_named_by_time() {
+    let Some(h) = harness() else { return };
+    let dir = set_download_dir(&h);
+    install_fake_ytdlp(&h);
+    let first = call(
+        &h.win,
+        "download_link",
+        json!({ "url": "https://x.com/jack/status/20" }),
+    )
+    .unwrap();
+    // The fake downloader chooses its own name; what matters is the folder.
+    assert!(Path::new(first["path"].as_str().unwrap()).starts_with(&dir));
+
+    // Default folders are separate: Footage for downloads, Finished for exports.
+    let h2 = harness().unwrap();
+    let footage = call(&h2.win, "download_dir", json!({})).unwrap();
+    let finished = call(&h2.win, "export_dir", json!({})).unwrap();
+    assert!(footage.as_str().unwrap().ends_with("Footage"), "{footage}");
+    assert!(finished.as_str().unwrap().ends_with("Finished"), "{finished}");
 }

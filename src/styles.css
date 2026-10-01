@@ -518,8 +518,13 @@ body.dragging .dropzone {
   position: absolute;
   pointer-events: auto;
   cursor: grab;
-  outline: 1px dashed transparent;
   touch-action: none;
+}
+/* Outline of the visible content (the image itself may have transparent margins). */
+.wm-box {
+  position: absolute;
+  pointer-events: none;
+  outline: 1px dashed transparent;
 }
 .wm img {
   display: block;
@@ -528,29 +533,26 @@ body.dragging .dropzone {
   pointer-events: none;
   -webkit-user-drag: none;
 }
-.wm.selected {
+.wm.selected .wm-box {
   outline-color: rgb(255 255 255 / 0.85);
 }
-.wm:hover {
+.wm:hover .wm-box {
   outline-color: rgb(255 255 255 / 0.5);
 }
 .wm.dragging {
   cursor: grabbing;
 }
-.wm-resize {
+.wm-grip {
   position: absolute;
-  right: -7px;
-  bottom: -7px;
   width: 13px;
   height: 13px;
+  margin: -6.5px 0 0 -6.5px;
   border-radius: 50%;
   background: #fff;
   border: 2px solid var(--accent);
   cursor: nwse-resize;
-  display: none;
-}
-.wm.selected .wm-resize {
-  display: block;
+  pointer-events: auto;
+  z-index: 4;
 }
 
 /* player bar */
@@ -614,6 +616,29 @@ body.dragging .dropzone {
   font-variant-numeric: tabular-nums;
   min-width: 78px;
   text-align: right;
+}
+.volume {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: 112px;
+  flex: none;
+}
+.vol-btn {
+  padding: 4px;
+  color: var(--muted);
+}
+.vol-btn:hover {
+  color: var(--text);
+}
+.vol-x {
+  display: none;
+}
+.vol-btn.muted .vol-x {
+  display: block;
+}
+.vol-btn.muted .vol-waves {
+  display: none;
 }
 .source-name {
   margin: 6px 2px 0;
@@ -985,4 +1010,94 @@ body.dragging .dropzone {
   .stage-wrap {
     height: 56vh;
   }
+}
+
+/* text watermark editor */
+.text-controls {
+  display: grid;
+  gap: 8px;
+}
+.text-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 52px;
+  max-height: 160px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  outline: none;
+}
+.text-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgb(91 141 239 / 0.22);
+}
+.text-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.text-row.small-gap {
+  gap: 14px;
+}
+.font-input {
+  flex: 1 1 130px;
+  min-width: 110px;
+  width: auto;
+  padding: 5px 8px;
+}
+.btn.toggle {
+  min-width: 30px;
+  padding: 4px 8px;
+}
+.btn.toggle[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn.toggle.b {
+  font-weight: 800;
+}
+.btn.toggle.i {
+  font-style: italic;
+  font-family: Georgia, serif;
+}
+label.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+input.color {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+}
+.menu-item.action .name {
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+.menu-item .tag.muted {
+  color: var(--muted);
+}
+.hint-drag {
+  margin-left: auto;
+}
+
+.folder {
+  display: grid;
+  gap: 4px;
+}
+.folder-label {
+  display: grid;
+  gap: 1px;
 }

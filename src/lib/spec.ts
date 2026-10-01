@@ -25,7 +25,10 @@ export function buildExportSpec(v: VideoState, output: string): ExportSpec {
       ny: w.ny,
       scale: w.scale,
       opacity: w.opacity,
+      content: w.content,
     })),
+    sourceBitrate: v.info.bitrate,
+    fps: v.info.fps,
     quality: v.quality,
   };
 }
