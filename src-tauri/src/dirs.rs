@@ -36,8 +36,13 @@ pub fn now_stem() -> String {
     timestamp_stem(n.year(), n.month(), n.day(), n.hour(), n.minute(), n.second())
 }
 
-/// A fresh, timestamp-named `.mp4` path in `dir` (creating `dir`).
-pub fn new_video_path(dir: &std::path::Path) -> std::io::Result<PathBuf> {
+/// A fresh, timestamp-named path with extension `ext` in `dir` (creating `dir`).
+pub fn new_media_path(dir: &std::path::Path, ext: &str) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
-    Ok(unique_path(dir, &now_stem(), "mp4"))
+    Ok(unique_path(dir, &now_stem(), ext))
+}
+
+/// A fresh, timestamp-named `.mp4` path in `dir`.
+pub fn new_video_path(dir: &std::path::Path) -> std::io::Result<PathBuf> {
+    new_media_path(dir, "mp4")
 }

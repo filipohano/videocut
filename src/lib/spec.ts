@@ -6,6 +6,7 @@ import type { VideoState } from "../store";
 export function buildExportSpec(v: VideoState, output: string): ExportSpec {
   const full = evenRect(fullRect({ w: v.info.width, h: v.info.height }));
   const crop = evenRect(v.crop);
+  const photo = v.info.isImage;
   const trimmedStart = v.trimStart > 0.001;
   const trimmedEnd = v.trimEnd < v.info.duration - 0.02;
   return {
@@ -17,8 +18,8 @@ export function buildExportSpec(v: VideoState, output: string): ExportSpec {
     hasAudio: v.info.hasAudio,
     audioCodec: v.info.audioCodec,
     crop: sameRect(crop, full) ? null : crop,
-    trimStart: trimmedStart ? v.trimStart : null,
-    trimEnd: trimmedEnd ? v.trimEnd : null,
+    trimStart: !photo && trimmedStart ? v.trimStart : null,
+    trimEnd: !photo && trimmedEnd ? v.trimEnd : null,
     watermarks: v.watermarks.map((w) => ({
       path: w.path,
       nx: w.nx,
@@ -29,6 +30,7 @@ export function buildExportSpec(v: VideoState, output: string): ExportSpec {
     })),
     sourceBitrate: v.info.bitrate,
     fps: v.info.fps,
+    imageFormat: photo ? v.imageFormat : null,
     quality: v.quality,
   };
 }

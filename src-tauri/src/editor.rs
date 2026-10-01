@@ -99,7 +99,33 @@ pub async fn probe_media<R: Runtime>(app: AppHandle<R>, path: String) -> Result<
     )
     .await
     .map_err(|e| format!("Couldn't read that file as a video ({e})"))?;
-    let info = parse_ffprobe(&json)?;
+    let mut info = parse_ffprobe(&json)?;
+    if info.is_image {
+        // Phone photos carry an EXIF rotation that ffmpeg applies but ffprobe doesn't
+        // report. Edit in the orientation ffmpeg will actually produce.
+        let report = jobs::capture_stderr(
+            &bins::ffmpeg(),
+            &[
+                "-hide_banner",
+                "-nostdin",
+                "-i",
+                &path,
+                "-frames:v",
+                "1",
+                "-vf",
+                "showinfo",
+                "-f",
+                "null",
+                "-",
+            ],
+        )
+        .await
+        .unwrap_or_default();
+        if let Some((w, h)) = fillerncut_core::parse_showinfo_size(&report) {
+            info.width = w;
+            info.height = h;
+        }
+    }
     allow_asset(&app, p);
     Ok(info)
 }
@@ -160,14 +186,21 @@ pub fn export_dir<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> 
 }
 
 /// A fresh timestamp-named path in the finished folder, e.g.
-/// `~/Movies/FillernCut/Finished/2026-10-01_15-42-07.mp4`. Never an existing file.
+/// `~/Movies/FillernCut/Finished/2026-10-01_15-42-07.mp4` (or `.jpg` / `.png` for
+/// photos). Never an existing file.
 #[tauri::command]
 pub fn default_save_path<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
+    ext: Option<String>,
 ) -> Result<String, String> {
+    let ext = match ext.as_deref().map(str::to_ascii_lowercase).as_deref() {
+        Some("jpg") => "jpg",
+        Some("png") => "png",
+        _ => "mp4",
+    };
     let dir = crate::dirs::finished_dir(&app, &state);
-    crate::dirs::new_video_path(&dir)
+    crate::dirs::new_media_path(&dir, ext)
         .map(|p| p.to_string_lossy().into_owned())
         .map_err(|e| format!("Can't create the folder {}: {e}", dir.display()))
 }
@@ -195,7 +228,7 @@ pub async fn export_video<R: Runtime>(
     mut spec: ExportSpec,
 ) -> Result<String, String> {
     if !Path::new(&spec.input).is_file() {
-        return Err("The source video is missing".into());
+        return Err("The source file is missing".into());
     }
     for wm in &spec.watermarks {
         if !Path::new(&wm.path).is_file() {
@@ -207,27 +240,47 @@ pub async fn export_video<R: Runtime>(
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Can't create the folder {}: {e}", parent.display()))?;
     }
-    if final_out
+    // Videos are .mp4; photos are .jpg / .png, matching the chosen format.
+    let (want, want_alt) = match spec.image_format {
+        None => ("mp4", "mp4"),
+        Some(f) => (
+            f.extension(),
+            if f.extension() == "jpg" {
+                "jpeg"
+            } else {
+                f.extension()
+            },
+        ),
+    };
+    let have = final_out
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .as_deref()
-        != Some("mp4")
-    {
-        return Err("Export path must end in .mp4".into());
+        .map(|e| e.to_ascii_lowercase());
+    if have.as_deref() != Some(want) && have.as_deref() != Some(want_alt) {
+        return Err(format!("Export path must end in .{want}"));
     }
     if final_out == Path::new(&spec.input) {
         return Err("Choose a different file name than the source".into());
     }
 
-    let candidates = encoder_candidates(&state).await;
+    // Photos use ffmpeg's built-in JPEG/PNG encoders; only video needs an H.264 encoder.
+    let candidates = if spec.image_format.is_some() {
+        vec![fillerncut_core::Encoder::Libx264] // unused for photos
+    } else {
+        encoder_candidates(&state).await
+    };
     if candidates.is_empty() {
         return Err("ffmpeg has no H.264 encoder available".into());
     }
     let total = export_duration(&spec);
     // Write next to the target, then rename, so a cancelled or failed export
     // never leaves a half-written file under the final name.
-    let partial = final_out.with_extension("partial.mp4");
+    let out_ext = final_out
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or(want)
+        .to_string();
+    let partial = final_out.with_extension(format!("partial.{out_ext}"));
     spec.output = partial.to_string_lossy().into_owned();
 
     let guard = state.begin_job("export")?;
@@ -249,7 +302,7 @@ pub async fn export_video<R: Runtime>(
                     fillerncut_core::HistoryKind::Export,
                     &final_out,
                     fillerncut_core::NewEntry {
-                        duration: Some(total),
+                        duration: (total > 0.0).then_some(total),
                         ..Default::default()
                     },
                 )

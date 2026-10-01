@@ -397,3 +397,160 @@ fn a_failed_export_leaves_no_history_entry() {
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn photos_can_be_probed_cropped_watermarked_and_exported() {
+    let Some(h) = harness() else { return };
+    let photo = h.dir.path().join("holiday.jpg").to_string_lossy().into_owned();
+    ff(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=800x600:rate=1:duration=1",
+        "-frames:v",
+        "1",
+        &photo,
+    ]);
+    let logo = make_png(h.dir.path(), "logo.png", "160x80", "white");
+
+    let info = call(&h.win, "probe_media", json!({ "path": photo })).unwrap();
+    assert_eq!(info["isImage"], true);
+    assert_eq!(
+        (
+            info["width"].as_u64(),
+            info["height"].as_u64(),
+            info["duration"].as_f64()
+        ),
+        (Some(800), Some(600), Some(0.0))
+    );
+
+    // Photos get a .jpg / .png name from the same timestamp scheme.
+    let jpg = call(&h.win, "default_save_path", json!({ "ext": "jpg" })).unwrap();
+    assert!(jpg.as_str().unwrap().ends_with(".jpg"));
+    let png = call(&h.win, "default_save_path", json!({ "ext": "png" })).unwrap();
+    assert!(png.as_str().unwrap().ends_with(".png"));
+
+    let spec = |out: &str, fmt: &str| {
+        json!({ "spec": {
+            "input": photo, "output": out, "sourceWidth": 800, "sourceHeight": 600, "sourceDuration": 0.0,
+            "hasAudio": false, "audioCodec": null, "crop": { "x": 100, "y": 100, "w": 400, "h": 400 },
+            "trimStart": null, "trimEnd": null, "imageFormat": fmt, "quality": 90,
+            "watermarks": [{ "path": logo, "nx": 0.5, "ny": 0.5, "scale": 0.3, "opacity": 1.0,
+                             "content": { "l": 0.0, "t": 0.0, "r": 1.0, "b": 1.0 } }] } })
+    };
+    let out = jpg.as_str().unwrap().to_string();
+    let seen = Arc::new(Mutex::new(Vec::<f64>::new()));
+    let s2 = seen.clone();
+    h.app.listen("job-progress", move |ev| {
+        let p: Value = serde_json::from_str(ev.payload()).unwrap();
+        if p["job"] == "export" {
+            s2.lock().unwrap().push(p["fraction"].as_f64().unwrap_or(-1.0));
+        }
+    });
+    assert_eq!(
+        call(&h.win, "export_video", spec(&out, "jpg")).unwrap(),
+        json!(out)
+    );
+    let done = call(&h.win, "probe_media", json!({ "path": out })).unwrap();
+    assert_eq!(
+        (
+            done["width"].as_u64(),
+            done["height"].as_u64(),
+            done["isImage"].as_bool()
+        ),
+        (Some(400), Some(400), Some(true))
+    );
+    assert_eq!(
+        seen.lock().unwrap().last(),
+        Some(&1.0),
+        "completion is still reported for photos"
+    );
+
+    // PNG works too; a mismatched extension is refused before any work.
+    let png_out = png.as_str().unwrap().to_string();
+    call(&h.win, "export_video", spec(&png_out, "png")).unwrap();
+    assert!(Path::new(&png_out).is_file());
+    assert!(call(
+        &h.win,
+        "export_video",
+        spec(&h.dir.path().join("x.mp4").to_string_lossy(), "jpg")
+    )
+    .is_err());
+    assert!(call(
+        &h.win,
+        "export_video",
+        spec(&h.dir.path().join("x.jpg").to_string_lossy(), "png")
+    )
+    .is_err());
+
+    // Both land in the history with a preview image (taken from the very first frame).
+    let hist = call(&h.win, "history_list", json!({})).unwrap();
+    let hist = hist.as_array().unwrap();
+    assert_eq!(hist.len(), 2);
+    assert!(
+        hist.iter()
+            .all(|e| e["thumbPath"].is_string() && e["duration"].is_null()),
+        "{hist:?}"
+    );
+}
+
+/// Insert an EXIF "Orientation = 6" (rotate 90° clockwise) tag into a JPEG.
+fn with_exif_rotation(jpeg: &[u8]) -> Vec<u8> {
+    let mut app1 = vec![0xFF, 0xE1, 0x00, 0x22];
+    app1.extend_from_slice(b"Exif\0\0");
+    app1.extend_from_slice(&[0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00]); // TIFF header, IFD at 8
+    app1.extend_from_slice(&[0x01, 0x00]); // one entry
+    app1.extend_from_slice(&[
+        0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00,
+    ]); // Orientation=6
+    app1.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // no next IFD
+    let mut out = jpeg[..2].to_vec(); // SOI
+    out.extend(app1);
+    out.extend_from_slice(&jpeg[2..]);
+    out
+}
+
+#[test]
+fn a_sideways_phone_photo_is_edited_in_the_orientation_it_is_exported_in() {
+    let Some(h) = harness() else { return };
+    let plain = h.dir.path().join("plain.jpg").to_string_lossy().into_owned();
+    ff(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=400x200:rate=1:duration=1",
+        "-frames:v",
+        "1",
+        &plain,
+    ]);
+    let rotated = h.dir.path().join("phone.jpg");
+    std::fs::write(&rotated, with_exif_rotation(&std::fs::read(&plain).unwrap())).unwrap();
+    let rotated = rotated.to_string_lossy().into_owned();
+
+    // The file is stored 400x200 but meant to be viewed 200x400 — and that's what we must report.
+    let info = call(&h.win, "probe_media", json!({ "path": rotated })).unwrap();
+    assert_eq!(info["isImage"], true);
+    assert_eq!(
+        (info["width"].as_u64(), info["height"].as_u64()),
+        (Some(200), Some(400)),
+        "{info}"
+    );
+    let unrotated = call(&h.win, "probe_media", json!({ "path": plain })).unwrap();
+    assert_eq!(
+        (unrotated["width"].as_u64(), unrotated["height"].as_u64()),
+        (Some(400), Some(200))
+    );
+
+    // A crop made in that orientation lands where the user put it.
+    let out = h.dir.path().join("rot-out.jpg").to_string_lossy().into_owned();
+    let spec = json!({ "spec": {
+        "input": rotated, "output": out, "sourceWidth": 200, "sourceHeight": 400, "sourceDuration": 0.0,
+        "hasAudio": false, "audioCodec": null, "crop": { "x": 0, "y": 100, "w": 200, "h": 200 },
+        "trimStart": null, "trimEnd": null, "imageFormat": "jpg", "watermarks": [], "quality": 90 } });
+    call(&h.win, "export_video", spec).unwrap();
+    let done = call(&h.win, "probe_media", json!({ "path": out })).unwrap();
+    assert_eq!(
+        (done["width"].as_u64(), done["height"].as_u64()),
+        (Some(200), Some(200))
+    );
+}

@@ -19,6 +19,8 @@ export interface VideoState {
   trimEnd: number;
   watermarks: ActiveWatermark[];
   quality: number;
+  /** photos only: what to export */
+  imageFormat: "jpg" | "png";
 }
 
 export type Topic =

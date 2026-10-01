@@ -47,6 +47,8 @@ pub fn register_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
 /// A menu with our own Undo / Redo. The default Edit menu would swallow ⌘Z for the
 /// webview's text-field undo; ours is forwarded to the app (`menu-undo` / `menu-redo`).
 fn build_menu<R: Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let new = MenuItem::with_id(handle, "new", "New Video or Photo", true, Some("CmdOrCtrl+N"))?;
+    let open = MenuItem::with_id(handle, "open", "Open…", true, Some("CmdOrCtrl+O"))?;
     let undo = MenuItem::with_id(handle, "undo", "Undo", true, Some("CmdOrCtrl+Z"))?;
     let redo = MenuItem::with_id(handle, "redo", "Redo", true, Some("CmdOrCtrl+Shift+Z"))?;
     let sep = || PredefinedMenuItem::separator(handle);
@@ -61,6 +63,17 @@ fn build_menu<R: Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>
             &PredefinedMenuItem::hide_others(handle, None)?,
             &sep()?,
             &PredefinedMenuItem::quit(handle, None)?,
+        ],
+    )?;
+    let file = Submenu::with_items(
+        handle,
+        "File",
+        true,
+        &[
+            &new,
+            &open,
+            &sep()?,
+            &PredefinedMenuItem::close_window(handle, None)?,
         ],
     )?;
     let edit = Submenu::with_items(
@@ -85,17 +98,21 @@ fn build_menu<R: Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>
             &PredefinedMenuItem::minimize(handle, None)?,
             &PredefinedMenuItem::maximize(handle, None)?,
             &PredefinedMenuItem::fullscreen(handle, None)?,
-            &sep()?,
-            &PredefinedMenuItem::close_window(handle, None)?,
         ],
     )?;
-    Menu::with_items(handle, &[&app_menu, &edit, &window])
+    Menu::with_items(handle, &[&app_menu, &file, &edit, &window])
 }
 
 pub fn run() {
     register_commands(tauri::Builder::default())
         .menu(build_menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
+            "new" => {
+                let _ = app.emit("menu-new", ());
+            }
+            "open" => {
+                let _ = app.emit("menu-open", ());
+            }
             "undo" => {
                 let _ = app.emit("menu-undo", ());
             }

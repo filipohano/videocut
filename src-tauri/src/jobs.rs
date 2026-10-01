@@ -114,6 +114,18 @@ pub async fn run_ffmpeg(
     }
 }
 
+/// Run a short command and return its stderr (ffmpeg prints filter info there), whatever the exit code.
+pub async fn capture_stderr(program: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    let out = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|e| format!("Couldn't start {}: {e}", program.display()))?;
+    Ok(String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
 /// Run a short command to completion and capture stdout (ffprobe, `ffmpeg -encoders`, `yt-dlp --version`).
 pub async fn capture(program: &std::path::Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new(program)

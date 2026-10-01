@@ -17,4 +17,7 @@ ffmpeg -hide_banner -loglevel error -y -f lavfi -i "color=c=0xe0457b:s=320x160,f
 # extra clips so the batch dialog has something to chew on
 cp public/dev/sample.webm public/dev/sample2.webm
 cp public/dev/sample.webm public/dev/sample3.webm
+# sample photos
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc2=size=1200x800:rate=1:duration=1" -frames:v 1 public/dev/photo.jpg
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc=size=900x1200:rate=1:duration=1" -frames:v 1 public/dev/photo.png
 echo "Dev assets written to public/dev/"

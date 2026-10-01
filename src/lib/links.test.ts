@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectPlatform, extensionOf, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from "./links";
+import { detectPlatform, extensionOf, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, isMediaPath, isPhotoPath, isVideoPath } from "./links";
 
 describe("detectPlatform", () => {
   it("recognises the three platforms", () => {
@@ -24,5 +24,17 @@ describe("extensions", () => {
     expect(extensionOf("noext")).toBe("");
     expect(VIDEO_EXTENSIONS).toContain("mp4");
     expect(IMAGE_EXTENSIONS).toContain("png");
+  });
+});
+
+describe("media kinds", () => {
+  it("tells photos from videos", () => {
+    expect(isPhotoPath("/a/B.JPG")).toBe(true);
+    expect(isPhotoPath("/a/b.jpeg")).toBe(true);
+    expect(isPhotoPath("/a/b.png")).toBe(true);
+    expect(isPhotoPath("/a/b.gif")).toBe(false);
+    expect(isVideoPath("/a/b.mov")).toBe(true);
+    expect(isMediaPath("/a/b.txt")).toBe(false);
+    expect(isMediaPath("/a/b.webp")).toBe(true);
   });
 });

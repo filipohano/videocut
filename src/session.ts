@@ -1,10 +1,13 @@
 /** Opening and closing videos, and switching between the start and editor views. */
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import { api, errorMessage } from "./api";
 import { evenRect, fullRect } from "./lib/crop";
 import { basename } from "./lib/format";
+import { PHOTO_EXTENSIONS, VIDEO_EXTENSIONS, extensionOf } from "./lib/links";
 import { withProgress } from "./progress";
 import { store } from "./store";
+import { isDirty } from "./undo";
 import { $ } from "./ui/dom";
 import { showOverlay } from "./ui/overlay";
 import type { Stage } from "./ui/stage";
@@ -14,7 +17,7 @@ let stage: Stage;
 
 export function initSession(s: Stage): void {
   stage = s;
-  $("#btn-new").addEventListener("click", closeVideo);
+  $("#btn-new").addEventListener("click", () => void newMedia());
 }
 
 export function setView(view: "start" | "editor"): void {
@@ -24,9 +27,37 @@ export function setView(view: "start" | "editor"): void {
   $("#undo-group").classList.toggle("hidden", view !== "editor");
 }
 
+/** True if it's fine to throw away the current edit (nothing unsaved, or the user agrees). */
+async function confirmDiscard(): Promise<boolean> {
+  if (!store.video || !isDirty()) return true;
+  return ask("You have edits that haven't been exported. Start over and discard them?", {
+    title: "Start over?",
+    kind: "warning",
+    okLabel: "Discard",
+    cancelLabel: "Keep editing",
+  });
+}
+
+/** ⌘N / the New button: back to the start screen for a fresh video or photo. */
+export async function newMedia(): Promise<void> {
+  if (!store.video || store.busy) return;
+  if (await confirmDiscard()) closeVideo();
+}
+
+/** ⌘O: choose a video or photo from disk. */
+export async function chooseAndOpen(): Promise<void> {
+  if (store.busy || !(await confirmDiscard())) return;
+  const picked = await open({
+    multiple: false,
+    filters: [{ name: "Videos and photos", extensions: [...VIDEO_EXTENSIONS, ...PHOTO_EXTENSIONS] }],
+  });
+  if (typeof picked === "string") await openVideo(picked);
+}
+
 export function closeVideo(): void {
   if (store.busy) return;
   stage.pause();
+  document.body.classList.remove("is-photo");
   store.video = null;
   store.selectedWatermark = null;
   store.emit("video", "watermarks", "selection");
@@ -39,7 +70,7 @@ export async function openVideo(path: string): Promise<boolean> {
     return false;
   }
   store.setBusy(true);
-  const overlay = showOverlay("Opening video…");
+  const overlay = showOverlay("Opening…");
   const previous = store.video;
   try {
     const info = await api.probeMedia(path);
@@ -47,16 +78,20 @@ export async function openVideo(path: string): Promise<boolean> {
     setView("editor");
 
     let playUrl = convertFileSrc(path);
-    try {
-      await stage.load(playUrl);
-    } catch {
-      // WKWebView can't play every container/codec: make a small H.264 proxy
-      // for the preview. Export always reads the original file.
-      overlay.setTitle("Preparing a preview…");
-      overlay.setMessage("This format can't be played directly, so a lightweight copy is made for previewing. Your export still uses the original.");
-      const proxy = await withProgress("preview", overlay.bar, overlay.label, () => api.makePreview(path, info.hasAudio, info.duration));
-      playUrl = convertFileSrc(proxy);
-      await stage.load(playUrl);
+    if (info.isImage) {
+      await stage.loadPhoto(playUrl);
+    } else {
+      try {
+        await stage.load(playUrl);
+      } catch {
+        // WKWebView can't play every container/codec: make a small H.264 proxy
+        // for the preview. Export always reads the original file.
+        overlay.setTitle("Preparing a preview…");
+        overlay.setMessage("This format can't be played directly, so a lightweight copy is made for previewing. Your export still uses the original.");
+        const proxy = await withProgress("preview", overlay.bar, overlay.label, () => api.makePreview(path, info.hasAudio, info.duration));
+        playUrl = convertFileSrc(proxy);
+        await stage.load(playUrl);
+      }
     }
 
     const frame = { w: info.width, h: info.height };
@@ -69,15 +104,19 @@ export async function openVideo(path: string): Promise<boolean> {
       trimStart: 0,
       trimEnd: info.duration,
       watermarks: [],
-      quality: store.settings.exportQuality,
+      quality: info.isImage ? store.settings.exportImageQuality : store.settings.exportQuality,
+      imageFormat: extensionOf(path) === "png" ? "png" : "jpg",
     };
+    document.body.classList.toggle("is-photo", info.isImage);
     store.selectedWatermark = null;
-    $("#source-name").textContent = `${basename(path)} · ${info.width}×${info.height} · ${info.videoCodec ?? "video"}${info.hasAudio ? "" : " · no audio"}`;
+    $("#source-name").textContent = info.isImage
+      ? `${basename(path)} · ${info.width}×${info.height} · photo`
+      : `${basename(path)} · ${info.width}×${info.height} · ${info.videoCodec ?? "video"}${info.hasAudio ? "" : " · no audio"}`;
     store.emit("video", "crop", "trim", "watermarks", "selection");
     return true;
   } catch (e) {
     toast(errorMessage(e), { kind: "error", timeout: 10000 });
-    if (previous) stage.load(previous.playUrl).catch(() => {});
+    if (previous) (previous.info.isImage ? stage.loadPhoto(previous.playUrl) : stage.load(previous.playUrl)).catch(() => {});
     setView(previous ? "editor" : "start");
     return false;
   } finally {

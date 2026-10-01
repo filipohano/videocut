@@ -23,6 +23,7 @@ let settings: Settings = {
   exportDir: null,
   askExportLocation: false,
   exportQuality: 60,
+  exportImageQuality: 90,
 };
 
 const entry = (id: string, name: string, file: string, aspect: number, nx: number, ny: number, scale: number, opacity: number, content = { l: 0, t: 0, r: 1, b: 1 }): WatermarkEntry => ({
@@ -54,11 +55,20 @@ async function simulate(job: string, message: string, ms: number): Promise<void>
 }
 
 function probe(url: string): Promise<MediaInfo> {
+  if (/\.(jpe?g|png|webp)$/i.test(url)) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () =>
+        resolve({ width: img.naturalWidth, height: img.naturalHeight, duration: 0, fps: null, isImage: true, bitrate: null, videoCodec: "mjpeg", hasAudio: false, audioCodec: null });
+      img.onerror = () => reject("Couldn't read that file as a photo. Run `npm run dev:assets` to create sample media.");
+      img.src = url;
+    });
+  }
   return new Promise((resolve, reject) => {
     const v = document.createElement("video");
     v.preload = "metadata";
     v.onloadedmetadata = () =>
-      resolve({ width: v.videoWidth, height: v.videoHeight, duration: v.duration, fps: 30, bitrate: 600_000, videoCodec: "h264", hasAudio: true, audioCodec: "aac" });
+      resolve({ width: v.videoWidth, height: v.videoHeight, duration: v.duration, fps: 30, isImage: false, bitrate: 600_000, videoCodec: "h264", hasAudio: true, audioCodec: "aac" });
     v.onerror = () => reject("Couldn't read that file as a video. Run `npm run dev:assets` to create sample media.");
     v.src = url;
   });
@@ -95,12 +105,13 @@ mockIPC(
       case "make_preview":
         return a.path;
       case "default_save_path":
-        return "/Users/you/Movies/FillernCut/Finished/2026-10-01_15-42-07.mp4";
+        return `/Users/you/Movies/FillernCut/Finished/2026-10-01_15-42-07.${a.ext ?? "mp4"}`;
       case "export_dir":
         return "/Users/you/Movies/FillernCut/Finished";
       case "estimate_export": {
         const s = a.spec;
         const c = s.crop ?? { w: s.sourceWidth, h: s.sourceHeight };
+        if (s.imageFormat) return { videoBitrate: 0, bytes: Math.round(c.w * c.h * (s.imageFormat === "png" ? 1.6 : 0.04 + 0.5 * Math.pow(s.quality / 100, 2.2))) };
         const secs = (s.trimEnd ?? s.sourceDuration) - (s.trimStart ?? 0);
         const rate = (s.sourceBitrate ?? 2_000_000) * Math.pow((c.w * c.h) / (s.sourceWidth * s.sourceHeight), 0.85) * Math.pow(2, (s.quality - 50) / 25);
         return { videoBitrate: Math.round(rate), bytes: Math.round(((rate + 128_000) * secs) / 8) };
@@ -151,7 +162,8 @@ mockIPC(
       case "plugin:dialog|ask":
         return true;
       case "plugin:dialog|message":
-        return "Yes";
+        // The real dialog answers with the label of the button pressed (custom labels, or "Yes").
+        return a.buttons?.OkCancelCustom?.[0] ?? a.buttons?.OkCustom ?? "Yes";
       case "plugin:updater|check":
         if (params.get("slow")) await sleep(Number(params.get("slow")));
         if (params.get("fail")) throw "network unreachable";

@@ -153,27 +153,33 @@ impl HistoryStore {
     }
 }
 
-/// ffmpeg arguments for a small preview image of `input` (a frame shortly after the start).
+/// ffmpeg arguments for a small preview image of `input`: a frame `at_seconds` in, or
+/// (when 0) simply the first frame. Photos need the latter; seeking in a single image
+/// yields nothing.
 pub fn build_thumbnail_args(input: &str, output: &str, at_seconds: f64) -> Vec<String> {
-    [
-        "-hide_banner",
-        "-nostdin",
-        "-y",
-        "-ss",
-        &format!("{at_seconds:.2}"),
-        "-i",
-        input,
-        "-frames:v",
-        "1",
-        "-vf",
-        "scale=240:-2",
-        "-q:v",
-        "5",
-        output,
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
+    let mut a: Vec<String> = ["-hide_banner", "-nostdin", "-y"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    if at_seconds > 0.0 {
+        a.extend(["-ss".to_string(), format!("{at_seconds:.2}")]);
+    }
+    a.extend(
+        [
+            "-i",
+            input,
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=240:-2",
+            "-q:v",
+            "5",
+            output,
+        ]
+        .iter()
+        .map(|s| s.to_string()),
+    );
+    a
 }
 
 #[cfg(test)]
@@ -313,11 +319,12 @@ mod tests {
     }
 
     #[test]
-    fn thumbnail_args_seek_before_the_input() {
+    fn thumbnail_args_seek_before_the_input_and_skip_seeking_for_the_first_frame() {
         let a = build_thumbnail_args("/in/a.mp4", "/t/x.jpg", 0.3);
         let ss = a.iter().position(|x| x == "-ss").unwrap();
         let i = a.iter().position(|x| x == "-i").unwrap();
         assert!(ss < i);
         assert_eq!(a.last().unwrap(), "/t/x.jpg");
+        assert!(!build_thumbnail_args("/in/a.jpg", "/t/x.jpg", 0.0).contains(&"-ss".to_string()));
     }
 }

@@ -23,6 +23,9 @@ export function buildBatchSpec(
   output: string,
   opts: BatchOptions,
 ): ExportSpec {
+  if (template.info.isImage !== info.isImage) {
+    throw new Error(info.isImage ? "This is a photo, but you set up a video." : "This is a video, but you set up a photo.");
+  }
   const full = evenRect(fullRect({ w: info.width, h: info.height }));
   let crop = full;
   if (opts.applyCrop) {
@@ -63,6 +66,7 @@ export function buildBatchSpec(
       : [],
     sourceBitrate: info.bitrate,
     fps: info.fps,
+    imageFormat: info.isImage ? template.imageFormat : null,
     quality: template.quality,
   };
 }

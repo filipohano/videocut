@@ -13,6 +13,8 @@ pub struct MediaInfo {
     pub height: u32,
     pub duration: f64,
     pub fps: Option<f64>,
+    /// A still photo (JPG, PNG, WebP), not a video.
+    pub is_image: bool,
     /// Video stream bitrate in bits/s (estimated from the container when the stream doesn't say).
     pub bitrate: Option<u64>,
     pub video_codec: Option<String>,
@@ -25,6 +27,20 @@ pub struct MediaInfo {
 pub struct EncoderSupport {
     pub videotoolbox: bool,
     pub libx264: bool,
+}
+
+/// Size of the first frame as ffmpeg's `showinfo` filter reports it (`s:200x400`).
+/// ffmpeg applies a photo's EXIF rotation when decoding, but ffprobe doesn't report it,
+/// so this is the only reliable way to learn the dimensions an edit has to use.
+pub fn parse_showinfo_size(ffmpeg_stderr: &str) -> Option<(u32, u32)> {
+    let line = ffmpeg_stderr
+        .lines()
+        .find(|l| l.contains("Parsed_showinfo") && l.contains(" s:"))?;
+    let rest = &line[line.find(" s:")? + 3..];
+    let size = rest.split_whitespace().next()?;
+    let (w, h) = size.split_once('x')?;
+    let (w, h): (u32, u32) = (w.parse().ok()?, h.parse().ok()?);
+    (w > 0 && h > 0).then_some((w, h))
 }
 
 pub fn parse_encoders(ffmpeg_encoders_output: &str) -> EncoderSupport {
@@ -121,10 +137,22 @@ pub fn parse_ffprobe(json: &str) -> Result<MediaInfo, String> {
         })
     });
 
+    // ffprobe reports single pictures as "image2" or "<codec>_pipe" containers.
+    let format_name = root
+        .pointer("/format/format_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let is_image = audio.is_none()
+        && format_name
+            .split(',')
+            .any(|f| f == "image2" || f == "image2pipe" || f.ends_with("_pipe"));
+
     Ok(MediaInfo {
         width,
         height,
-        duration,
+        // ffprobe makes up a frame duration for stills; a photo has none.
+        duration: if is_image { 0.0 } else { duration },
+        is_image,
         bitrate,
         fps: video
             .get("avg_frame_rate")
@@ -195,6 +223,40 @@ mod tests {
         assert_eq!(parse_ffprobe(with).unwrap().bitrate, Some(1_500_000));
         let none = r#"{"streams":[{"codec_type":"video","codec_name":"h264","width":10,"height":10}],"format":{"duration":"1"}}"#;
         assert_eq!(parse_ffprobe(none).unwrap().bitrate, None);
+    }
+
+    #[test]
+    fn photos_are_recognised_by_their_container() {
+        let photo = |fmt: &str, codec: &str| {
+            format!(
+                r#"{{"streams":[{{"codec_type":"video","codec_name":"{codec}","width":4000,"height":3000}}],"format":{{"format_name":"{fmt}"}}}}"#
+            )
+        };
+        for (fmt, codec) in [
+            ("image2", "mjpeg"),
+            ("png_pipe", "png"),
+            ("webp_pipe", "webp"),
+            ("jpeg_pipe", "mjpeg"),
+        ] {
+            let info = parse_ffprobe(&photo(fmt, codec)).unwrap();
+            assert!(info.is_image, "{fmt}");
+            assert_eq!((info.width, info.height, info.duration), (4000, 3000, 0.0));
+        }
+        let video = r#"{"streams":[{"codec_type":"video","codec_name":"h264","width":10,"height":10}],"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","duration":"2"}}"#;
+        assert!(!parse_ffprobe(video).unwrap().is_image);
+        let gif = r#"{"streams":[{"codec_type":"video","codec_name":"gif","width":10,"height":10}],"format":{"format_name":"gif","duration":"2"}}"#;
+        assert!(
+            !parse_ffprobe(gif).unwrap().is_image,
+            "animated GIFs are treated as video"
+        );
+    }
+
+    #[test]
+    fn showinfo_gives_the_displayed_size() {
+        let out = "[Parsed_showinfo_0 @ 0x55] config in time_base: 1/25\n[Parsed_showinfo_0 @ 0x55] n:   0 pts:      0 pts_time:0 fmt:yuvj420p cl:center sar:1/1 s:200x400 i:P iskey:1 type:I\n";
+        assert_eq!(parse_showinfo_size(out), Some((200, 400)));
+        assert_eq!(parse_showinfo_size("nothing useful"), None);
+        assert_eq!(parse_showinfo_size("[Parsed_showinfo_0 @ 0x1] n: 0 s:0x10"), None);
     }
 
     #[test]

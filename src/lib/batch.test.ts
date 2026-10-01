@@ -4,7 +4,7 @@ import type { VideoState } from "../store";
 import { DEFAULT_BATCH_OPTIONS, buildBatchSpec } from "./batch";
 
 const info = (w: number, h: number): MediaInfo => ({
-  width: w, height: h, duration: 12, fps: 30, bitrate: 2_000_000, videoCodec: "h264", hasAudio: true, audioCodec: "aac",
+  width: w, height: h, duration: 12, fps: 30, isImage: false, bitrate: 2_000_000, videoCodec: "h264", hasAudio: true, audioCodec: "aac",
 });
 
 function template(over: Partial<VideoState> = {}): VideoState {
@@ -20,6 +20,7 @@ function template(over: Partial<VideoState> = {}): VideoState {
       { id: "1", name: "logo", fileName: "1.png", aspect: 0.5, content: { l: 0.1, t: 0, r: 0.9, b: 1 }, text: null, nx: 0.7, ny: 0.8, scale: 0.2, opacity: 0.6, path: "/lib/1.png", url: "u" },
     ],
     quality: 55,
+    imageFormat: "jpg",
     ...over,
   };
 }
@@ -51,6 +52,16 @@ describe("buildBatchSpec", () => {
     const s = buildBatchSpec(template(), info(1000, 500), "/i", "/o", { applyCrop: false, applyWatermarks: false });
     expect(s.crop).toBeNull();
     expect(s.watermarks).toEqual([]);
+  });
+
+  it("photos get the template's image format; mixing photos and videos is refused", () => {
+    const photoInfo = { ...info(4000, 3000), isImage: true, duration: 0, fps: null, bitrate: null, hasAudio: false, audioCodec: null };
+    const photoTemplate = template({ info: photoInfo, crop: { x: 0, y: 0, w: 2000, h: 3000 }, imageFormat: "png", quality: 90 });
+    const s = buildBatchSpec(photoTemplate, { ...photoInfo, width: 2000, height: 1500 }, "/p.jpg", "/o.png", DEFAULT_BATCH_OPTIONS);
+    expect(s.imageFormat).toBe("png");
+    expect(s.crop).toEqual({ x: 0, y: 0, w: 1000, h: 1500 });
+    expect(() => buildBatchSpec(photoTemplate, info(100, 100), "/v.mp4", "/o.png", DEFAULT_BATCH_OPTIONS)).toThrow(/video/);
+    expect(() => buildBatchSpec(template(), photoInfo, "/p.jpg", "/o.mp4", DEFAULT_BATCH_OPTIONS)).toThrow(/photo/);
   });
 
   it("an untouched crop stays untouched", () => {

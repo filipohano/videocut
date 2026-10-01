@@ -20,3 +20,9 @@ export function extensionOf(path: string): string {
   const dot = path.lastIndexOf(".");
   return dot < 0 ? "" : path.slice(dot + 1).toLowerCase();
 }
+
+/** Photos that can be opened and edited (not just used as watermarks). GIF is excluded: it's animated. */
+export const PHOTO_EXTENSIONS = ["jpg", "jpeg", "png", "webp"];
+export const isPhotoPath = (path: string) => PHOTO_EXTENSIONS.includes(extensionOf(path));
+export const isVideoPath = (path: string) => VIDEO_EXTENSIONS.includes(extensionOf(path));
+export const isMediaPath = (path: string) => isPhotoPath(path) || isVideoPath(path);

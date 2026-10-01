@@ -21,6 +21,7 @@ interface Snapshot {
   trimStart: number;
   trimEnd: number;
   quality: number;
+  imageFormat: "jpg" | "png";
   watermarks: ActiveWatermark[];
   selected: string | null;
 }
@@ -28,6 +29,8 @@ interface Snapshot {
 let states: string[] = [];
 let index = -1;
 let restoring = false;
+/** Step at which everything was last exported (or the start); anything else is unsaved work. */
+let cleanIndex = 0;
 const listeners = new Set<() => void>();
 
 /** Text images are large; they're regenerated from the style on restore instead of stored. */
@@ -40,6 +43,7 @@ function serialize(): string | null {
     trimStart: v.trimStart,
     trimEnd: v.trimEnd,
     quality: v.quality,
+    imageFormat: v.imageFormat,
     watermarks: v.watermarks.map((w) => ({ ...w, url: w.text ? "" : w.url })),
     selected: store.selectedWatermark,
   };
@@ -51,6 +55,13 @@ function notify(): void {
   listeners.forEach((f) => f());
 }
 
+export const isDirty = () => index >= 0 && index !== cleanIndex;
+/** Call after a successful export: the current edit is safely on disk. */
+export function markClean(): void {
+  settle.cancel();
+  commit(); // capture any change that was still waiting to settle
+  cleanIndex = index;
+}
 export const canUndo = () => index > 0;
 export const canRedo = () => index >= 0 && index < states.length - 1;
 export function onUndoChange(fn: () => void): void {
@@ -61,6 +72,7 @@ export function onUndoChange(fn: () => void): void {
 function reset(): void {
   states = [];
   index = -1;
+  cleanIndex = 0;
   const s = serialize();
   if (s) {
     states = [s];
@@ -69,16 +81,21 @@ function reset(): void {
   notify();
 }
 
-const settle = debounce(() => {
+function commit(): void {
   if (restoring) return;
   const s = serialize();
   if (!s || s === states[index]) return;
   states = states.slice(0, index + 1);
   states.push(s);
-  if (states.length > MAX_STEPS) states.shift();
+  if (states.length > MAX_STEPS) {
+    states.shift();
+    cleanIndex--;
+  }
   index = states.length - 1;
   notify();
-}, SETTLE_MS);
+}
+
+const settle = debounce(commit, SETTLE_MS);
 
 function restore(json: string): void {
   const v = store.video;
@@ -91,6 +108,7 @@ function restore(json: string): void {
     v.trimStart = snap.trimStart;
     v.trimEnd = snap.trimEnd;
     v.quality = snap.quality;
+    v.imageFormat = snap.imageFormat;
     // Watermarks deleted from the library since can't come back.
     const available = new Set(store.library.map((e) => e.id));
     v.watermarks = snap.watermarks

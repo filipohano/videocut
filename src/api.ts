@@ -11,6 +11,8 @@ export interface MediaInfo {
   height: number;
   duration: number;
   fps: number | null;
+  /** a still photo (JPG/PNG/WebP), not a video */
+  isImage: boolean;
   /** video bitrate, bits/s */
   bitrate: number | null;
   videoCodec: string | null;
@@ -70,6 +72,7 @@ export interface Settings {
   exportDir: string | null;
   askExportLocation: boolean;
   exportQuality: number;
+  exportImageQuality: number;
 }
 
 export interface AppInfo {
@@ -98,7 +101,9 @@ export interface ExportSpec {
   watermarks: { path: string; nx: number; ny: number; scale: number; opacity: number; content: ContentBox }[];
   sourceBitrate: number | null;
   fps: number | null;
-  /** 1..100; 50 ≈ the source's own bitrate */
+  /** set for photos: export a single JPG/PNG */
+  imageFormat: "jpg" | "png" | null;
+  /** video: 1..100, 50 ≈ the source's own bitrate. photo (JPG): JPEG quality */
   quality: number;
 }
 
@@ -143,7 +148,7 @@ export const api = {
   probeMedia: (path: string) => invoke<MediaInfo>("probe_media", { path }),
   makePreview: (path: string, hasAudio: boolean, duration: number) =>
     invoke<string>("make_preview", { path, hasAudio, duration }),
-  defaultSavePath: () => invoke<string>("default_save_path"),
+  defaultSavePath: (ext?: "mp4" | "jpg" | "png") => invoke<string>("default_save_path", { ext: ext ?? null }),
   exportDir: () => invoke<string>("export_dir"),
   estimateExport: (spec: ExportSpec) => invoke<Estimate>("estimate_export", { spec }),
   exportVideo: (spec: ExportSpec) => invoke<string>("export_video", { spec }),

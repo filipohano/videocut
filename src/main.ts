@@ -2,9 +2,9 @@ import "./styles.css";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api, errorMessage } from "./api";
-import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, extensionOf } from "./lib/links";
+import { IMAGE_EXTENSIONS, isPhotoPath, isVideoPath } from "./lib/links";
 import { startProgressRouter } from "./progress";
-import { initSession, openVideo } from "./session";
+import { chooseAndOpen, initSession, newMedia, openVideo } from "./session";
 import { store } from "./store";
 import { canRedo, canUndo, initUndo, onUndoChange, redo, undo } from "./undo";
 import { initUpdateUi, launchCheck, launchGate } from "./updates";
@@ -91,9 +91,21 @@ function initUndoUi(): void {
   redoBtn.addEventListener("click", redo);
 
   document.addEventListener("keydown", (e) => {
-    if (!store.video || !(e.metaKey || e.ctrlKey) || e.altKey) return;
+    if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey && e.key.toLowerCase() !== "z") return;
     if (document.querySelector("dialog[open]")) return;
     const key = e.key.toLowerCase();
+    // ⌘N: start over with a new video or photo; ⌘O: open one.
+    if (key === "n" && store.video) {
+      e.preventDefault();
+      void newMedia();
+      return;
+    }
+    if (key === "o") {
+      e.preventDefault();
+      void chooseAndOpen();
+      return;
+    }
+    if (!store.video) return;
     if (key === "z") {
       e.preventDefault();
       e.shiftKey ? redo() : undo();
@@ -103,6 +115,8 @@ function initUndoUi(): void {
     }
   });
   // On macOS the Edit menu owns ⌘Z and forwards it here.
+  void listen("menu-new", () => !document.querySelector("dialog[open]") && void newMedia());
+  void listen("menu-open", () => !document.querySelector("dialog[open]") && void chooseAndOpen());
   void listen("menu-undo", () => store.video && !document.querySelector("dialog[open]") && undo());
   void listen("menu-redo", () => store.video && !document.querySelector("dialog[open]") && redo());
 }
@@ -121,24 +135,27 @@ async function setupDragAndDrop(): Promise<void> {
       } else if (p.type === "drop") {
         document.body.classList.remove("dragging");
         hint.classList.add("hidden");
-        const videos = p.paths.filter((f) => VIDEO_EXTENSIONS.includes(extensionOf(f)));
-        const images = p.paths.filter((f) => IMAGE_EXTENSIONS.includes(extensionOf(f)));
-        const video = videos[0];
-        if (isBatchOpen()) addToBatch(videos);
-        else if (videos.length > 1 && store.video) openBatch(videos);
-        else if (videos.length > 1) {
-          // Several videos and nothing open yet: edit the first, then offer to repeat it on the rest.
-          if (await openVideo(video)) {
-            const rest = videos.slice(1);
-            toast(`Dropped ${videos.length} videos. Set up the first, then apply it to the other ${rest.length}.`, {
+        const videos = p.paths.filter(isVideoPath);
+        const images = p.paths.filter((f) => IMAGE_EXTENSIONS.includes(f.slice(f.lastIndexOf(".") + 1).toLowerCase()));
+        const photos = images.filter(isPhotoPath);
+        const media = [...videos, ...(store.video ? [] : photos)];
+        if (isBatchOpen()) addToBatch([...videos, ...photos]);
+        else if (media.length > 1 && store.video) openBatch(media);
+        else if (media.length > 1) {
+          // Several files and nothing open yet: edit the first, then offer to repeat it on the rest.
+          if (await openVideo(media[0])) {
+            const rest = media.slice(1);
+            toast(`Dropped ${media.length} files. Set up the first, then apply it to the other ${rest.length}.`, {
               kind: "info",
               timeout: 20000,
               action: { label: "Batch the rest", onClick: () => openBatch(rest) },
             });
           }
-        } else if (video) await openVideo(video);
-        if (!isBatchOpen()) for (const img of images) await importWatermark(img);
-        if (!video && images.length === 0) toast("That file type isn't supported. Drop a video or a PNG/JPG watermark.", { kind: "error" });
+        } else if (media.length === 1) await openVideo(media[0]);
+        // Images that weren't opened as the photo to edit become watermarks. (With something
+        // already open that is every image: press ⌘N first to edit a photo instead.)
+        if (!isBatchOpen()) for (const img of images.filter((f) => !media.includes(f))) await importWatermark(img);
+        if (p.paths.length > 0 && videos.length === 0 && images.length === 0) toast("That file type isn\'t supported. Drop a video or a JPG/PNG photo.", { kind: "error" });
       }
     });
   } catch (e) {

@@ -3,7 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { CANCELLED, api, errorMessage } from "../api";
 import { DEFAULT_BATCH_OPTIONS, buildBatchSpec, type BatchOptions } from "../lib/batch";
 import { basename } from "../lib/format";
-import { VIDEO_EXTENSIONS, extensionOf } from "../lib/links";
+import { PHOTO_EXTENSIONS, VIDEO_EXTENSIONS, isMediaPath } from "../lib/links";
 import { subscribe } from "../progress";
 import { store } from "../store";
 import { flushTextSaves } from "../watermarkOps";
@@ -36,7 +36,7 @@ export function addToBatch(paths: string[]): number {
   if (running) return 0;
   let added = 0;
   for (const p of paths) {
-    if (!VIDEO_EXTENSIONS.includes(extensionOf(p))) continue;
+    if (!isMediaPath(p)) continue;
     if (p === store.video?.path || items.some((i) => i.path === p)) continue;
     if (items.length >= MAX_ITEMS) break;
     items.push({ path: p, status: "queued", fraction: 0 });
@@ -51,7 +51,7 @@ export function addToBatch(paths: string[]): number {
 
 export function openBatch(paths: string[] = []): void {
   if (!store.video) {
-    toast("Open a video and set up the crop and watermarks first. Batch repeats that on more videos.", { kind: "info" });
+    toast("Open a video or photo and set up the crop and watermarks first. Batch repeats that on more files.", { kind: "info" });
     return;
   }
   if (!running) {
@@ -117,7 +117,7 @@ export function initBatchDialog(): void {
     );
 
     const parts: (HTMLElement | false)[] = [
-      h("div", { class: "dialog-head" }, h("h2", {}, "Apply this edit to more videos"), !running && h("button", { class: "icon-btn", "aria-label": "Close", onclick: () => dialog.close() }, "×")),
+      h("div", { class: "dialog-head" }, h("h2", {}, "Apply this edit to more files"), !running && h("button", { class: "icon-btn", "aria-label": "Close", onclick: () => dialog.close() }, "×")),
       h(
         "p",
         { class: "batch-summary" },
@@ -127,13 +127,13 @@ export function initBatchDialog(): void {
       h(
         "div",
         { class: "list" },
-        ...(rows.length ? rows : [h("div", { class: "empty" }, "Add the videos you want to process, or drop them here.")]),
+        ...(rows.length ? rows : [h("div", { class: "empty" }, "Add the videos or photos you want to process, or drop them here.")]),
       ),
       h(
         "div",
         { class: "dialog-foot" },
         h("span", { class: "grow" }, running ? "Working… this can take a while for long videos." : finished ? `${done} exported${failed ? `, ${failed} failed` : ""}.` : queued ? `${queued} video${queued === 1 ? "" : "s"} ready` : ""),
-        !running && h("button", { class: "btn small", onclick: async () => { const picked = await open({ multiple: true, filters: [{ name: "Video", extensions: VIDEO_EXTENSIONS }] }); if (Array.isArray(picked)) addToBatch(picked); else if (typeof picked === "string") addToBatch([picked]); } }, "Add videos…"),
+        !running && h("button", { class: "btn small", onclick: async () => { const picked = await open({ multiple: true, filters: [{ name: "Videos and photos", extensions: [...VIDEO_EXTENSIONS, ...PHOTO_EXTENSIONS] }] }); if (Array.isArray(picked)) addToBatch(picked); else if (typeof picked === "string") addToBatch([picked]); } }, "Add files…"),
         finished && done > 0 && h("button", { class: "btn small", onclick: () => { const last = [...items].reverse().find((i) => i.output); if (last?.output) void api.revealInFinder(last.output); } }, "Show in Finder"),
         running
           ? h("button", { class: "btn small danger", onclick: () => { cancelled = true; void api.cancelJob("export"); } }, "Stop")
@@ -170,7 +170,7 @@ export function initBatchDialog(): void {
         render();
         try {
           const info = await api.probeMedia(item.path);
-          const output = await api.defaultSavePath();
+          const output = await api.defaultSavePath(template.info.isImage ? template.imageFormat : "mp4");
           item.output = await api.exportVideo(buildBatchSpec(template, info, item.path, output, opts));
           item.status = "done";
         } catch (e) {

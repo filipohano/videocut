@@ -33,7 +33,7 @@
               <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 14l5-5-5-5" /><path d="M20 9H10a6 6 0 000 12h3" /></svg>
             </button>
           </div>
-          <button id="btn-new" class="btn hidden">New video</button>
+          <button id="btn-new" class="btn hidden" title="Start over with a new video or photo (⌘N)">New</button>
           <button id="btn-history" class="btn">History</button>
           <button id="btn-settings" class="btn">Settings</button>
         </div>
@@ -44,9 +44,9 @@
       <main>
         <!-- START -->
         <section id="view-start">
-          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Choose a video">
-            <p class="dz-title"><strong>Click to choose a video</strong> or drag &amp; drop it here</p>
-            <p class="muted small">MP4, MOV, MKV, WebM, AVI…</p>
+          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Choose a video or photo">
+            <p class="dz-title"><strong>Click to choose a video or photo</strong> or drag &amp; drop it here</p>
+            <p class="muted small">MP4, MOV, MKV, WebM · JPG, PNG, WebP</p>
           </div>
 
           <div class="card link-card">
@@ -78,6 +78,7 @@
               <div id="stage-wrap" class="stage-wrap">
                 <div id="stage" class="stage">
                   <video id="video" playsinline preload="auto"></video>
+                  <img id="photo" class="photo" alt="" draggable="false" />
                   <div id="crop-dim" class="crop-dim"></div>
                   <div id="crop-frame" class="crop-frame"><i></i><i></i><i></i><i></i></div>
                   <div id="wm-layer" class="wm-layer"></div>

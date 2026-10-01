@@ -144,7 +144,22 @@ export function initOutputPanel(): void {
   const help = $("#codec-help");
   const summary = $("#output-summary");
 
+  const isPhoto = () => !!store.video?.info.isImage;
+
   function renderCodec(): void {
+    if (isPhoto()) {
+      const v = store.video!;
+      codec.replaceChildren(h("option", { value: "jpg" }, "JPG (smaller files)"), h("option", { value: "png" }, "PNG (lossless, keeps transparency)"));
+      codec.value = v.imageFormat;
+      codec.disabled = false;
+      quality.disabled = v.imageFormat === "png";
+      help.textContent =
+        v.imageFormat === "png"
+          ? "PNG is lossless, so there's no quality setting. Files are larger than JPG."
+          : "JPG quality: 90 is visually clean for most photos, 100 is overkill, and below 70 compression starts to show.";
+      return;
+    }
+    quality.disabled = false;
     codec.replaceChildren(
       h(
         "option",
@@ -165,8 +180,19 @@ export function initOutputPanel(): void {
           : "ffmpeg wasn't found, so exporting is unavailable. Reinstall FillernCut.";
   }
 
+  codec.addEventListener("change", () => {
+    const v = store.video;
+    if (!v || !v.info.isImage) return;
+    v.imageFormat = codec.value === "png" ? "png" : "jpg";
+    renderCodec();
+    store.emit("quality");
+    refreshEstimate();
+  });
+
   const persist = debounce(() => {
-    api.saveSettings({ ...store.settings, exportQuality: Number(quality.value) }).then((s) => (store.settings = s));
+    const q = Number(quality.value);
+    const next = isPhoto() ? { ...store.settings, exportImageQuality: q } : { ...store.settings, exportQuality: q };
+    api.saveSettings(next).then((s) => (store.settings = s));
   }, 500);
 
   const range = bindRange(quality, (q) => {
@@ -200,7 +226,8 @@ export function initOutputPanel(): void {
     const c = evenRect(v.crop);
     const len = Math.max(0, v.trimEnd - v.trimStart);
     const wms = v.watermarks.length;
-    const base = `Output: ${c.w} × ${c.h} · ${formatSeconds(len, locale)} s` + (wms ? ` · ${wms} watermark${wms > 1 ? "s" : ""}` : "");
+    const what = v.info.isImage ? v.imageFormat.toUpperCase() : `${formatSeconds(len, locale)} s`;
+    const base = `Output: ${c.w} × ${c.h} · ${what}` + (wms ? ` · ${wms} watermark${wms > 1 ? "s" : ""}` : "");
     if (bytes !== null) summary.textContent = `${base} · about ${formatBytes(bytes)}`;
     else if (!keepOld) summary.textContent = base;
   }
@@ -209,8 +236,11 @@ export function initOutputPanel(): void {
     const v = store.video;
     if (!v) return;
     range.set(v.quality);
-    out.textContent = String(v.quality);
+    out.textContent = v.info.isImage && v.imageFormat === "png" ? "lossless" : String(v.quality);
     refreshEstimate();
+  });
+  store.on(["video", "quality"], () => {
+    if (store.video) renderCodec();
   });
   store.on("video", renderCodec);
   renderCodec();

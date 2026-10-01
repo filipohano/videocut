@@ -84,6 +84,30 @@ pub struct WatermarkPlacement {
     pub content: ContentBox,
 }
 
+/// Output format when the source is a photo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageFormat {
+    Jpg,
+    Png,
+}
+
+impl ImageFormat {
+    pub fn extension(self) -> &'static str {
+        match self {
+            ImageFormat::Jpg => "jpg",
+            ImageFormat::Png => "png",
+        }
+    }
+}
+
+/// ffmpeg `-q:v` for MJPEG from a 1..=100 "JPEG quality" (100 = best): 90 → 5, 75 → 9, 50 → 16.
+pub fn jpeg_qscale(quality: u8) -> u32 {
+    (31.0 - quality.clamp(1, 100) as f64 * 0.29)
+        .round()
+        .clamp(2.0, 31.0) as u32
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportSpec {
@@ -104,8 +128,11 @@ pub struct ExportSpec {
     pub source_bitrate: Option<u64>,
     #[serde(default)]
     pub fps: Option<f64>,
-    /// 1..=100. 50 aims for roughly the source's quality and file size, each
-    /// step of 25 doubles / halves the bitrate.
+    /// Set when the source is a photo: export a single JPG/PNG instead of a video.
+    #[serde(default)]
+    pub image_format: Option<ImageFormat>,
+    /// Video: 1..=100, 50 aims for roughly the source's quality and file size, each
+    /// step of 25 doubles / halves the bitrate. Photo (JPG): JPEG quality 1..=100.
     pub quality: u8,
 }
 
@@ -304,6 +331,56 @@ fn copyable_audio(codec: Option<&str>) -> bool {
     matches!(codec, Some("aac" | "mp3" | "ac3" | "eac3"))
 }
 
+/// Photo export: crop + watermarks, one frame out as JPG or PNG.
+fn build_image_args(spec: &ExportSpec, fmt: ImageFormat) -> Result<Vec<String>, ExportError> {
+    // Same graph as for video, but the last step picks the photo pixel format.
+    let graph = build_filter_complex(spec)?;
+    let last = format!("[c{}]format=yuv420p[vout]", spec.watermarks.len());
+    let pix = match fmt {
+        ImageFormat::Jpg => "yuvj420p",
+        ImageFormat::Png => "rgba",
+    };
+    let filter = graph.replacen(
+        &last,
+        &format!("[c{}]format={pix}[vout]", spec.watermarks.len()),
+        1,
+    );
+
+    let mut a = s(&[
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+    ]);
+    a.extend(s(&["-i", &spec.input]));
+    for wm in &spec.watermarks {
+        a.extend(s(&["-i", &wm.path]));
+    }
+    a.extend(s(&[
+        "-filter_complex",
+        &filter,
+        "-map",
+        "[vout]",
+        "-frames:v",
+        "1",
+        "-an",
+    ]));
+    match fmt {
+        ImageFormat::Jpg => a.extend(s(&[
+            "-c:v",
+            "mjpeg",
+            "-q:v",
+            &jpeg_qscale(spec.quality).to_string(),
+        ])),
+        ImageFormat::Png => a.extend(s(&["-c:v", "png"])),
+    }
+    // A single named file, not an image sequence.
+    a.extend(s(&["-update", "1", &spec.output]));
+    Ok(a)
+}
+
 /// Video bitrate (bits/s) the export aims for: the source's own bitrate, scaled
 /// for the cropped area and the quality slider. Keeps files about as big as the
 /// original instead of ballooning, which fixed-quality modes do.
@@ -332,12 +409,26 @@ pub fn target_bitrate(spec: &ExportSpec) -> u64 {
 
 /// Rough output size in bytes (video target + 128 kbit/s audio).
 pub fn estimate_bytes(spec: &ExportSpec) -> u64 {
+    if let Some(fmt) = spec.image_format {
+        let px = spec
+            .normalized_crop()
+            .map(|c| (c.w * c.h) as f64)
+            .unwrap_or((spec.source_width * spec.source_height) as f64);
+        let bytes_per_px = match fmt {
+            ImageFormat::Jpg => 0.04 + 0.5 * (spec.quality.clamp(1, 100) as f64 / 100.0).powf(2.2),
+            ImageFormat::Png => 1.6,
+        };
+        return (px * bytes_per_px) as u64;
+    }
     let secs = export_duration(spec).max(0.0);
     let audio = if spec.has_audio { 128_000.0 } else { 0.0 };
     ((target_bitrate(spec) as f64 + audio) * secs / 8.0) as u64
 }
 
 pub fn build_export_args(spec: &ExportSpec, encoder: Encoder) -> Result<Vec<String>, ExportError> {
+    if let Some(fmt) = spec.image_format {
+        return build_image_args(spec, fmt);
+    }
     let filter = build_filter_complex(spec)?;
     let trim = spec.normalized_trim()?;
 
@@ -381,6 +472,9 @@ pub fn build_export_args(spec: &ExportSpec, encoder: Encoder) -> Result<Vec<Stri
 
 /// Seconds of output the export will produce (for progress percentages).
 pub fn export_duration(spec: &ExportSpec) -> f64 {
+    if spec.image_format.is_some() {
+        return 0.0;
+    }
     match spec.normalized_trim() {
         Ok(Some((_, d))) => d,
         _ => spec.source_duration,
@@ -511,6 +605,7 @@ mod tests {
             watermarks: vec![],
             source_bitrate: Some(4_000_000),
             fps: Some(30.0),
+            image_format: None,
             quality: 50,
         }
     }
@@ -799,6 +894,66 @@ mod tests {
             "{f}"
         );
         assert!(f.contains("y='min(max(0,960),main_h-overlay_h)'"), "{f}");
+    }
+
+    #[test]
+    fn photo_export_is_one_frame_with_the_right_codec() {
+        let mut sp = spec();
+        sp.image_format = Some(ImageFormat::Jpg);
+        sp.output = "/out/a.jpg".into();
+        sp.quality = 90;
+        sp.watermarks = vec![wm("/lib/logo.png", 0.5, 0.5, 0.2, 1.0)];
+        let a = build_export_args(&sp, Encoder::Libx264).unwrap();
+        assert_eq!(arg_after(&a, "-c:v"), "mjpeg");
+        assert_eq!(arg_after(&a, "-q:v"), "5");
+        assert_eq!(arg_after(&a, "-frames:v"), "1");
+        assert!(arg_after(&a, "-filter_complex").ends_with("[c1]format=yuvj420p[vout]"));
+        assert!(!a.contains(&"-movflags".to_string()) && !a.contains(&"-ss".to_string()));
+        assert_eq!(a.last().unwrap(), "/out/a.jpg");
+
+        sp.image_format = Some(ImageFormat::Png);
+        sp.output = "/out/a.png".into();
+        let a = build_export_args(&sp, Encoder::Libx264).unwrap();
+        assert_eq!(arg_after(&a, "-c:v"), "png");
+        assert!(arg_after(&a, "-filter_complex").ends_with("[c1]format=rgba[vout]"));
+        assert!(!a.contains(&"-q:v".to_string()));
+    }
+
+    #[test]
+    fn photos_ignore_trim_and_have_no_duration() {
+        let mut sp = spec();
+        sp.image_format = Some(ImageFormat::Png);
+        sp.source_duration = 0.0;
+        sp.trim_start = Some(3.0); // nonsense for a photo; must not error
+        assert!(build_export_args(&sp, Encoder::Libx264).is_ok());
+        assert_eq!(export_duration(&sp), 0.0);
+    }
+
+    #[test]
+    fn jpeg_quality_maps_to_ffmpeg_qscale() {
+        assert_eq!(jpeg_qscale(100), 2);
+        assert_eq!(jpeg_qscale(90), 5);
+        assert_eq!(jpeg_qscale(75), 9);
+        assert_eq!(jpeg_qscale(1), 31);
+        assert_eq!(jpeg_qscale(0), 31, "clamped");
+    }
+
+    #[test]
+    fn photo_size_estimates_scale_with_pixels_and_quality() {
+        let mut sp = spec();
+        sp.image_format = Some(ImageFormat::Jpg);
+        sp.quality = 90;
+        let hi = estimate_bytes(&sp);
+        sp.quality = 50;
+        let lo = estimate_bytes(&sp);
+        assert!(hi > lo * 2 && lo > 100_000, "{hi} {lo}");
+        sp.crop = Some(CropRect {
+            x: 0,
+            y: 0,
+            w: 540,
+            h: 960,
+        });
+        assert!(estimate_bytes(&sp) < lo / 3);
     }
 
     #[test]

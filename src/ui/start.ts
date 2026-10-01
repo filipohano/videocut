@@ -1,7 +1,7 @@
 /** Start screen: choose a file or paste a link. */
 import { open } from "@tauri-apps/plugin-dialog";
 import { CANCELLED, api, errorMessage } from "../api";
-import { VIDEO_EXTENSIONS, detectPlatform } from "../lib/links";
+import { PHOTO_EXTENSIONS, VIDEO_EXTENSIONS, detectPlatform } from "../lib/links";
 import { withProgress } from "../progress";
 import { store } from "../store";
 import { $ } from "./dom";
@@ -18,7 +18,10 @@ export function initStart(openVideo: (path: string) => Promise<boolean>): void {
   const label = $(".progress-label", progress);
 
   async function pick(): Promise<void> {
-    const picked = await open({ multiple: false, filters: [{ name: "Video", extensions: VIDEO_EXTENSIONS }] });
+    const picked = await open({
+      multiple: false,
+      filters: [{ name: "Videos and photos", extensions: [...VIDEO_EXTENSIONS, ...PHOTO_EXTENSIONS] }],
+    });
     if (typeof picked === "string") await openVideo(picked);
   }
   dropzone.addEventListener("click", () => void pick());

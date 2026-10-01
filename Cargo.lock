@@ -846,7 +846,7 @@ dependencies = [
 
 [[package]]
 name = "fillerncut"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -870,7 +870,7 @@ dependencies = [
 
 [[package]]
 name = "fillerncut-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "image",
  "serde",

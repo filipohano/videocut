@@ -4,6 +4,7 @@ import { basename } from "../lib/format";
 import { buildExportSpec } from "../lib/spec";
 import { withProgress } from "../progress";
 import { store } from "../store";
+import { markClean } from "../undo";
 import { flushTextSaves } from "../watermarkOps";
 import { $ } from "./dom";
 import { toast } from "./toast";
@@ -18,32 +19,37 @@ export function initExportBar(): void {
   store.on("busy", () => {
     btn.disabled = store.busy;
   });
+  store.on("video", () => {
+    if (store.video) btn.textContent = store.video.info.isImage ? "Export photo" : "Export video";
+  });
 
   btn.addEventListener("click", async () => {
     const v = store.video;
     if (!v || store.busy) return;
     if (store.encoder === "none") return toast("ffmpeg wasn't found, so exporting isn't available.", { kind: "error" });
 
-    // Finished videos go straight to the "Finished" folder, named by time —
+    const ext = v.info.isImage ? v.imageFormat : "mp4";
+    // Finished files go straight to the "Finished" folder, named by time —
     // unless the user asked to be asked where to save every time.
     let output: string | null;
     try {
-      const suggested = await api.defaultSavePath();
+      const suggested = await api.defaultSavePath(ext);
       output = store.settings.askExportLocation
-        ? await save({ defaultPath: suggested, filters: [{ name: "MP4 video", extensions: ["mp4"] }] })
+        ? await save({ defaultPath: suggested, filters: [{ name: ext === "mp4" ? "MP4 video" : ext.toUpperCase() + " photo", extensions: ext === "jpg" ? ["jpg", "jpeg"] : [ext] }] })
         : suggested;
     } catch (e) {
       return toast(errorMessage(e), { kind: "error" });
     }
     if (!output) return;
-    if (!/\.mp4$/i.test(output)) output += ".mp4";
+    if (!new RegExp(`\\.${ext === "jpg" ? "(jpg|jpeg)" : ext}$`, "i").test(output)) output += `.${ext}`;
 
     store.setBusy(true);
     row.classList.remove("hidden");
     try {
       // Edited text watermarks must be on disk before ffmpeg reads them.
       await flushTextSaves();
-      const saved = await withProgress("export", bar, label, () => api.exportVideo(buildExportSpec(v, output!)), "Exporting…");
+      const saved = await withProgress("export", bar, label, () => api.exportVideo(buildExportSpec(v, output!)), v.info.isImage ? "Saving…" : "Exporting…");
+      markClean();
       toast(`Saved ${basename(saved)}`, {
         kind: "success",
         timeout: 12000,

@@ -5,6 +5,8 @@ Download, crop, trim and watermark videos on your Mac — everything runs locall
 - **Downloader** for **TikTok**, **Instagram** and **X/Twitter** links. TikTok comes in source quality
   *without* the watermark (full links, `vt.tiktok.com` share links, or just the 19-digit post id), and TikTok
   **photo posts** are built into a 1080×1920 video with their sound.
+- **Photos too**: open a JPG, PNG or WebP and crop it, add watermarks and text, and export as JPG (with a quality
+  slider) or PNG (lossless, keeps transparency). Phone photos that are stored sideways are handled.
 - **Editor** with a large live preview: drag-to-crop with aspect-ratio presets, trim in/out, and an exact
   "what you see is what you get" export.
 - **Watermark library.** Upload a logo once, or **add text** (any installed font, bold/italic, colour, outline,
@@ -16,6 +18,8 @@ Download, crop, trim and watermark videos on your Mac — everything runs locall
   chronologically. Both folders, and "ask where to save", are in Settings.
 - **Sensible file sizes.** The export aims for the original's bitrate (adjusted for crop and the quality slider)
   instead of a fixed high quality, and shows the expected size before you export.
+- **⌘N** starts over with a new video or photo (it asks first if you have edits you haven't exported), **⌘O** opens
+  one.
 - **Undo / Redo** (⌘Z / ⇧⌘Z, or the arrows in the header) for crop, trim, quality and every watermark change.
   A drag or a burst of typing is one step.
 - **Batch**: set up the crop, watermarks and quality on one video, press **Batch…**, add more videos (or drop

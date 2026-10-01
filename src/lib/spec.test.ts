@@ -5,7 +5,7 @@ import type { VideoState } from "../store";
 function video(over: Partial<VideoState> = {}): VideoState {
   return {
     path: "/in/a.mov",
-    info: { width: 1080, height: 1920, duration: 10, fps: 30, bitrate: 3_000_000, videoCodec: "h264", hasAudio: true, audioCodec: "aac" },
+    info: { width: 1080, height: 1920, duration: 10, fps: 30, isImage: false, bitrate: 3_000_000, videoCodec: "h264", hasAudio: true, audioCodec: "aac" },
     playUrl: "asset://x",
     crop: { x: 0, y: 0, w: 1080, h: 1920 },
     aspect: "free",
@@ -13,9 +13,32 @@ function video(over: Partial<VideoState> = {}): VideoState {
     trimEnd: 10,
     watermarks: [],
     quality: 60,
+    imageFormat: "jpg",
     ...over,
   };
 }
+
+describe("buildExportSpec for photos", () => {
+  const photo = () =>
+    video({
+      info: { width: 4000, height: 3000, duration: 0, fps: null, isImage: true, bitrate: null, videoCodec: "mjpeg", hasAudio: false, audioCodec: null },
+      crop: { x: 0, y: 0, w: 2000, h: 3000 },
+      trimEnd: 0,
+      imageFormat: "png",
+      quality: 90,
+    });
+  it("exports a single image in the chosen format, never trimmed", () => {
+    const s = buildExportSpec(photo(), "/out/a.png");
+    expect(s.imageFormat).toBe("png");
+    expect(s.trimStart).toBeNull();
+    expect(s.trimEnd).toBeNull();
+    expect(s.crop).toEqual({ x: 0, y: 0, w: 2000, h: 3000 });
+    expect(s.quality).toBe(90);
+  });
+  it("videos carry no image format", () => {
+    expect(buildExportSpec(video(), "/o.mp4").imageFormat).toBeNull();
+  });
+});
 
 describe("buildExportSpec", () => {
   it("omits crop and trim when untouched", () => {
@@ -36,7 +59,7 @@ describe("buildExportSpec", () => {
 
   it("treats an odd-sized full frame as untouched", () => {
     const v = video({
-      info: { width: 607, height: 495, duration: 9.7, fps: 30, bitrate: null, videoCodec: "h264", hasAudio: false, audioCodec: null },
+      info: { width: 607, height: 495, duration: 9.7, fps: 30, isImage: false, bitrate: null, videoCodec: "h264", hasAudio: false, audioCodec: null },
       crop: { x: 0, y: 0, w: 606, h: 494 },
       trimEnd: 9.7,
     });

@@ -16,6 +16,8 @@ const PAUSE_PATH = "M7 5h4v14H7zM13 5h4v14h-4z";
 
 export interface Stage {
   load(url: string): Promise<void>;
+  /** Show a photo instead of a video. */
+  loadPhoto(url: string): Promise<void>;
   toggle(): void;
   pause(): void;
   seek(seconds: number): void;
@@ -26,6 +28,7 @@ export function initStage(): Stage {
   const wrap = $("#stage-wrap");
   const stage = $("#stage");
   const video = $<HTMLVideoElement>("#video");
+  const photo = $<HTMLImageElement>("#photo");
   const cropFrame = $("#crop-frame");
   const cropDim = $("#crop-dim");
   const handleLayer = $("#handle-layer");
@@ -374,7 +377,26 @@ export function initStage(): Stage {
   });
 
   return {
+    loadPhoto(url: string): Promise<void> {
+      video.pause();
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => done(new Error("The photo took too long to load")), 15000);
+        function done(err?: Error) {
+          clearTimeout(timer);
+          photo.onload = photo.onerror = null;
+          if (err) reject(err);
+          else {
+            stage.classList.add("photo");
+            resolve();
+          }
+        }
+        photo.onload = () => (photo.naturalWidth === 0 ? done(new Error("That photo can't be shown")) : done());
+        photo.onerror = () => done(new Error("The preview can't show this photo"));
+        photo.src = url;
+      });
+    },
     load(url: string): Promise<void> {
+      stage.classList.remove("photo");
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => cleanup(new Error("The preview took too long to load")), 7000);
         const onOk = () => {

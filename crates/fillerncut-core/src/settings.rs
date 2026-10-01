@@ -57,6 +57,8 @@ pub struct Settings {
     pub ask_export_location: bool,
     /// Last used export quality (1..=100); 50 ≈ the source's own bitrate.
     pub export_quality: u8,
+    /// JPEG quality for photo exports (1..=100).
+    pub export_image_quality: u8,
 }
 
 impl Default for Settings {
@@ -69,6 +71,7 @@ impl Default for Settings {
             export_dir: None,
             ask_export_location: false,
             export_quality: 60,
+            export_image_quality: 90,
         }
     }
 }
@@ -86,6 +89,7 @@ impl Settings {
 
     pub fn sanitized(mut self) -> Settings {
         self.export_quality = self.export_quality.clamp(1, 100);
+        self.export_image_quality = self.export_image_quality.clamp(1, 100);
         self
     }
 

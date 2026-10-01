@@ -125,6 +125,7 @@ fn spec_for(env: &Env, input: &str, info: &MediaInfo, out_name: &str) -> ExportS
         watermarks: vec![],
         source_bitrate: info.bitrate,
         fps: info.fps,
+        image_format: None,
         quality: 50,
     }
 }
@@ -453,5 +454,135 @@ fn a_watermarked_export_is_not_much_bigger_than_the_source() {
     assert!(
         (out_size as f64) < (src_size as f64) * 2.0,
         "export {out_size} B vs source {src_size} B should stay within ~2x at default quality"
+    );
+}
+
+fn photo(env: &Env, name: &str, size: &str) -> String {
+    let path = env.dir.path().join(name).to_string_lossy().into_owned();
+    run(
+        &env.ffmpeg,
+        &[
+            "-hide_banner",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("testsrc2=size={size}:rate=1:duration=1"),
+            "-frames:v",
+            "1",
+            &path,
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>(),
+    );
+    path
+}
+
+#[test]
+fn photos_are_detected_cropped_watermarked_and_saved_as_jpg_or_png() {
+    let Some(env) = env() else {
+        eprintln!("skipping: ffmpeg/ffprobe not available");
+        return;
+    };
+    for name in ["shot.jpg", "shot.png"] {
+        let src = photo(&env, name, "800x600");
+        let info = probe(&env, &src);
+        assert!(info.is_image, "{name} should be seen as a photo");
+        assert_eq!(
+            (info.width, info.height, info.duration),
+            (800, 600, 0.0),
+            "{name}"
+        );
+    }
+
+    let src = photo(&env, "shot.jpg", "800x600");
+    let info = probe(&env, &src);
+    for (fmt, ext, codec) in [
+        (ImageFormat::Jpg, "jpg", "mjpeg"),
+        (ImageFormat::Png, "png", "png"),
+    ] {
+        let mut spec = spec_for(&env, &src, &info, &format!("out.{ext}"));
+        spec.image_format = Some(fmt);
+        spec.quality = 90;
+        spec.crop = Some(CropRect {
+            x: 100,
+            y: 50,
+            w: 400,
+            h: 300,
+        });
+        spec.watermarks = vec![WatermarkPlacement {
+            path: logo(&env, "w.png", "100x50", "white"),
+            nx: 0.0,
+            ny: 0.0,
+            scale: 0.25,
+            opacity: 1.0,
+            content: ContentBox::default(),
+        }];
+        run(&env.ffmpeg, &build_export_args(&spec, env.encoder).unwrap());
+        let out = probe(&env, &spec.output);
+        assert!(out.is_image, "{ext}");
+        assert_eq!((out.width, out.height), (400, 300), "{ext}");
+        assert_eq!(out.video_codec.as_deref(), Some(codec));
+        // The white logo is in the top-left of the *cropped* photo.
+        let px = |x: u32, y: u32| -> u8 {
+            let o = Command::new(&env.ffmpeg)
+                .args([
+                    "-v",
+                    "error",
+                    "-i",
+                    &spec.output,
+                    "-vf",
+                    &format!("format=gray,crop=1:1:{x}:{y}"),
+                    "-frames:v",
+                    "1",
+                    "-f",
+                    "rawvideo",
+                    "-",
+                ])
+                .output()
+                .unwrap();
+            o.stdout[0]
+        };
+        assert!(px(20, 10) > 220, "{ext}: logo should be white at the corner");
+    }
+}
+
+#[test]
+fn png_export_keeps_transparency_and_jpg_quality_changes_the_size() {
+    let Some(env) = env() else {
+        eprintln!("skipping: ffmpeg/ffprobe not available");
+        return;
+    };
+    // A PNG whose left half is fully transparent.
+    let src = env.dir.path().join("alpha.png").to_string_lossy().into_owned();
+    let mut img = image::RgbaImage::from_pixel(200, 100, image::Rgba([0, 0, 0, 0]));
+    for y in 0..100 {
+        for x in 100..200 {
+            img.put_pixel(x, y, image::Rgba([200, 30, 30, 255]));
+        }
+    }
+    img.save(&src).unwrap();
+    let info = probe(&env, &src);
+    let mut spec = spec_for(&env, &src, &info, "alpha-out.png");
+    spec.image_format = Some(ImageFormat::Png);
+    run(&env.ffmpeg, &build_export_args(&spec, env.encoder).unwrap());
+    let out = image::open(&spec.output).unwrap().to_rgba8();
+    assert_eq!(out.get_pixel(10, 50).0[3], 0, "transparent stays transparent");
+    assert_eq!(out.get_pixel(150, 50).0[3], 255);
+
+    let photo_src = photo(&env, "big.png", "1280x720");
+    let pinfo = probe(&env, &photo_src);
+    let size_at = |q: u8, name: &str| {
+        let mut s = spec_for(&env, &photo_src, &pinfo, name);
+        s.image_format = Some(ImageFormat::Jpg);
+        s.quality = q;
+        run(&env.ffmpeg, &build_export_args(&s, env.encoder).unwrap());
+        std::fs::metadata(&s.output).unwrap().len()
+    };
+    let (hi, lo) = (size_at(95, "q95.jpg"), size_at(30, "q30.jpg"));
+    assert!(
+        hi > lo * 2,
+        "quality 95 ({hi} B) should be much bigger than 30 ({lo} B)"
     );
 }
