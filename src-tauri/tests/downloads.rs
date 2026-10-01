@@ -426,3 +426,20 @@ fn downloads_go_to_the_footage_folder_and_are_named_by_time() {
     assert!(footage.as_str().unwrap().ends_with("Footage"), "{footage}");
     assert!(finished.as_str().unwrap().ends_with("Finished"), "{finished}");
 }
+
+#[test]
+fn downloads_are_recorded_in_the_history_with_their_source() {
+    let Some(h) = harness() else { return };
+    fixture();
+    set_download_dir(&h);
+    let url = format!("https://www.tiktok.com/@someone/photo/{PHOTO_ID}");
+    let res = call(&h.win, "download_link", json!({ "url": url })).unwrap();
+    let list = call(&h.win, "history_list", json!({})).unwrap();
+    let e = &list.as_array().unwrap()[0];
+    assert_eq!(e["kind"], "download");
+    assert_eq!(e["path"], res["path"]);
+    assert_eq!(e["platform"], "tiktok");
+    assert_eq!(e["sourceUrl"], json!(url));
+    assert_eq!(e["title"], "Photos");
+    assert!(e["thumbPath"].is_string());
+}

@@ -1,14 +1,18 @@
 import "./styles.css";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api, errorMessage } from "./api";
 import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, extensionOf } from "./lib/links";
 import { startProgressRouter } from "./progress";
 import { initSession, openVideo } from "./session";
 import { store } from "./store";
+import { canRedo, canUndo, initUndo, onUndoChange, redo, undo } from "./undo";
 import { initUpdateUi, launchCheck, launchGate } from "./updates";
 import { importWatermark, refreshLibrary } from "./watermarkOps";
 import { $ } from "./ui/dom";
+import { addToBatch, initBatchDialog, isBatchOpen, openBatch } from "./ui/batchDialog";
 import { initExportBar } from "./ui/exportBar";
+import { initHistoryDialog } from "./ui/historyDialog";
 import { initCropPanel, initOutputPanel, initTrimPanel } from "./ui/panels";
 import { initSettingsDialog } from "./ui/settingsDialog";
 import { initStage } from "./ui/stage";
@@ -42,7 +46,10 @@ async function boot(): Promise<void> {
   initOutputPanel();
   initExportBar();
   initSettingsDialog();
+  initHistoryDialog(openVideo);
+  initBatchDialog();
   initUpdateUi();
+  initUndoUi();
 
   // While a job runs, the editing panels are frozen.
   store.on("busy", () => {
@@ -69,6 +76,37 @@ async function boot(): Promise<void> {
   void launchCheck();
 }
 
+/** Undo / Redo: header buttons, ⌘Z / ⇧⌘Z, and the Edit menu items. */
+function initUndoUi(): void {
+  initUndo();
+  const undoBtn = $<HTMLButtonElement>("#btn-undo");
+  const redoBtn = $<HTMLButtonElement>("#btn-redo");
+  const refresh = () => {
+    undoBtn.disabled = store.busy || !canUndo();
+    redoBtn.disabled = store.busy || !canRedo();
+  };
+  onUndoChange(refresh);
+  store.on("busy", refresh);
+  undoBtn.addEventListener("click", undo);
+  redoBtn.addEventListener("click", redo);
+
+  document.addEventListener("keydown", (e) => {
+    if (!store.video || !(e.metaKey || e.ctrlKey) || e.altKey) return;
+    if (document.querySelector("dialog[open]")) return;
+    const key = e.key.toLowerCase();
+    if (key === "z") {
+      e.preventDefault();
+      e.shiftKey ? redo() : undo();
+    } else if (key === "y" && e.ctrlKey) {
+      e.preventDefault();
+      redo();
+    }
+  });
+  // On macOS the Edit menu owns ⌘Z and forwards it here.
+  void listen("menu-undo", () => store.video && !document.querySelector("dialog[open]") && undo());
+  void listen("menu-redo", () => store.video && !document.querySelector("dialog[open]") && redo());
+}
+
 async function setupDragAndDrop(): Promise<void> {
   const hint = $("#drop-hint");
   try {
@@ -83,10 +121,23 @@ async function setupDragAndDrop(): Promise<void> {
       } else if (p.type === "drop") {
         document.body.classList.remove("dragging");
         hint.classList.add("hidden");
-        const video = p.paths.find((f) => VIDEO_EXTENSIONS.includes(extensionOf(f)));
+        const videos = p.paths.filter((f) => VIDEO_EXTENSIONS.includes(extensionOf(f)));
         const images = p.paths.filter((f) => IMAGE_EXTENSIONS.includes(extensionOf(f)));
-        if (video) await openVideo(video);
-        for (const img of images) await importWatermark(img);
+        const video = videos[0];
+        if (isBatchOpen()) addToBatch(videos);
+        else if (videos.length > 1 && store.video) openBatch(videos);
+        else if (videos.length > 1) {
+          // Several videos and nothing open yet: edit the first, then offer to repeat it on the rest.
+          if (await openVideo(video)) {
+            const rest = videos.slice(1);
+            toast(`Dropped ${videos.length} videos. Set up the first, then apply it to the other ${rest.length}.`, {
+              kind: "info",
+              timeout: 20000,
+              action: { label: "Batch the rest", onClick: () => openBatch(rest) },
+            });
+          }
+        } else if (video) await openVideo(video);
+        if (!isBatchOpen()) for (const img of images) await importWatermark(img);
         if (!video && images.length === 0) toast("That file type isn't supported. Drop a video or a PNG/JPG watermark.", { kind: "error" });
       }
     });

@@ -172,6 +172,7 @@ export function initOutputPanel(): void {
   const range = bindRange(quality, (q) => {
     out.textContent = String(q);
     if (store.video) store.video.quality = q;
+    store.emit("quality");
     persist();
     refreshEstimate();
   });

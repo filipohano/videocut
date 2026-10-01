@@ -16,6 +16,12 @@ Download, crop, trim and watermark videos on your Mac — everything runs locall
   chronologically. Both folders, and "ask where to save", are in Settings.
 - **Sensible file sizes.** The export aims for the original's bitrate (adjusted for crop and the quality slider)
   instead of a fixed high quality, and shows the expected size before you export.
+- **Undo / Redo** (⌘Z / ⇧⌘Z, or the arrows in the header) for crop, trim, quality and every watermark change.
+  A drag or a burst of typing is one step.
+- **Batch**: set up the crop, watermarks and quality on one video, press **Batch…**, add more videos (or drop
+  several at once), and they're all exported with the same edit, one after another.
+- **History** of every download and export, with preview images, "Show in Finder", "Edit again" and "Copy link".
+  Removing an entry never deletes the video.
 - **Preview volume** slider in the player bar (only affects what you hear in the app, never the export).
 - **Fast export**: H.264 on the Apple-silicon media engine (VideoToolbox) with a quality slider, and an
   automatic CPU fallback if the hardware encoder ever refuses a file.

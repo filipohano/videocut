@@ -2,13 +2,15 @@ mod bins;
 mod dirs;
 mod download;
 mod editor;
+mod history;
 mod jobs;
 mod library;
 mod settings;
 mod state;
 
 pub use state::AppState;
-use tauri::{Builder, Manager, Runtime};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::{Builder, Emitter, Manager, Runtime};
 
 /// Register every command. Generic over the runtime so the integration tests
 /// can drive the real command layer with Tauri's mock runtime.
@@ -26,6 +28,9 @@ pub fn register_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         download::download_dir,
         editor::export_dir,
         editor::estimate_export,
+        history::history_list,
+        history::history_remove,
+        history::history_clear,
         library::library_add_text,
         library::library_replace_text,
         library::library_list,
@@ -39,8 +44,66 @@ pub fn register_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
     ])
 }
 
+/// A menu with our own Undo / Redo. The default Edit menu would swallow ⌘Z for the
+/// webview's text-field undo; ours is forwarded to the app (`menu-undo` / `menu-redo`).
+fn build_menu<R: Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let undo = MenuItem::with_id(handle, "undo", "Undo", true, Some("CmdOrCtrl+Z"))?;
+    let redo = MenuItem::with_id(handle, "redo", "Redo", true, Some("CmdOrCtrl+Shift+Z"))?;
+    let sep = || PredefinedMenuItem::separator(handle);
+    let app_menu = Submenu::with_items(
+        handle,
+        "FillernCut",
+        true,
+        &[
+            &PredefinedMenuItem::about(handle, None, None)?,
+            &sep()?,
+            &PredefinedMenuItem::hide(handle, None)?,
+            &PredefinedMenuItem::hide_others(handle, None)?,
+            &sep()?,
+            &PredefinedMenuItem::quit(handle, None)?,
+        ],
+    )?;
+    let edit = Submenu::with_items(
+        handle,
+        "Edit",
+        true,
+        &[
+            &undo,
+            &redo,
+            &sep()?,
+            &PredefinedMenuItem::cut(handle, None)?,
+            &PredefinedMenuItem::copy(handle, None)?,
+            &PredefinedMenuItem::paste(handle, None)?,
+            &PredefinedMenuItem::select_all(handle, None)?,
+        ],
+    )?;
+    let window = Submenu::with_items(
+        handle,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(handle, None)?,
+            &PredefinedMenuItem::maximize(handle, None)?,
+            &PredefinedMenuItem::fullscreen(handle, None)?,
+            &sep()?,
+            &PredefinedMenuItem::close_window(handle, None)?,
+        ],
+    )?;
+    Menu::with_items(handle, &[&app_menu, &edit, &window])
+}
+
 pub fn run() {
     register_commands(tauri::Builder::default())
+        .menu(build_menu)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "undo" => {
+                let _ = app.emit("menu-undo", ());
+            }
+            "redo" => {
+                let _ = app.emit("menu-redo", ());
+            }
+            _ => {}
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -54,6 +117,10 @@ pub fn run() {
             let library_dir = data_dir.join("watermarks");
             std::fs::create_dir_all(library_dir.join("files"))?;
             let _ = app.asset_protocol_scope().allow_directory(&library_dir, true);
+            // ...and so are the history preview images.
+            let thumbs = data_dir.join("history").join("thumbs");
+            std::fs::create_dir_all(&thumbs)?;
+            let _ = app.asset_protocol_scope().allow_directory(&thumbs, true);
 
             let state = AppState::new(data_dir.clone(), cache_dir.clone());
             let auto_update_ytdlp = state.settings().auto_update_ytdlp;

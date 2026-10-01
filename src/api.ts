@@ -102,6 +102,22 @@ export interface ExportSpec {
   quality: number;
 }
 
+export interface HistoryEntry {
+  id: string;
+  kind: "download" | "export";
+  path: string;
+  /** unix seconds */
+  createdAt: number;
+  title: string | null;
+  sourceUrl: string | null;
+  platform: string | null;
+  bytes: number | null;
+  duration: number | null;
+  /** does the video file still exist? */
+  exists: boolean;
+  thumbPath: string | null;
+}
+
 export interface Estimate {
   videoBitrate: number;
   bytes: number;
@@ -146,6 +162,10 @@ export const api = {
   libraryAddText: (pngBase64: string, style: TextStyle) => invoke<WatermarkEntry>("library_add_text", { pngBase64, style }),
   libraryReplaceText: (id: string, pngBase64: string, style: TextStyle) =>
     invoke<WatermarkEntry>("library_replace_text", { id, pngBase64, style }),
+
+  historyList: () => invoke<HistoryEntry[]>("history_list"),
+  historyRemove: (id: string) => invoke<void>("history_remove", { id }),
+  historyClear: () => invoke<void>("history_clear"),
 
   getSettings: () => invoke<Settings>("get_settings"),
   saveSettings: (settings: Settings) => invoke<Settings>("save_settings", { settings }),

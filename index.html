@@ -25,7 +25,16 @@
         </div>
         <div class="top-actions">
           <button id="btn-update-chip" class="chip warn hidden" title="A newer version is available"></button>
+          <div id="undo-group" class="undo-group hidden">
+            <button id="btn-undo" class="btn icon" aria-label="Undo" title="Undo (⌘Z)" disabled>
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5" /><path d="M4 9h10a6 6 0 010 12h-3" /></svg>
+            </button>
+            <button id="btn-redo" class="btn icon" aria-label="Redo" title="Redo (⇧⌘Z)" disabled>
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 14l5-5-5-5" /><path d="M20 9H10a6 6 0 000 12h3" /></svg>
+            </button>
+          </div>
           <button id="btn-new" class="btn hidden">New video</button>
+          <button id="btn-history" class="btn">History</button>
           <button id="btn-settings" class="btn">Settings</button>
         </div>
       </header>
@@ -160,7 +169,10 @@
                   <span class="progress-label small"></span>
                   <button id="export-cancel" class="btn small">Cancel</button>
                 </div>
-                <button id="btn-export" class="btn primary big">Export video</button>
+                <div class="export-actions">
+                  <button id="btn-export" class="btn primary big">Export video</button>
+                  <button id="btn-batch" class="btn big secondary" title="Apply this crop, watermarks and quality to more videos">Batch…</button>
+                </div>
               </div>
             </div>
           </div>
@@ -168,6 +180,8 @@
       </main>
 
       <dialog id="settings-dialog" class="dialog"></dialog>
+      <dialog id="history-dialog" class="dialog wide"></dialog>
+      <dialog id="batch-dialog" class="dialog wide"></dialog>
       <div id="overlay" class="overlay hidden"></div>
       <div id="drop-hint" class="drop-hint hidden">Drop a video to edit, or an image to add it to your watermarks</div>
       <div id="toasts" class="toasts" aria-live="polite"></div>

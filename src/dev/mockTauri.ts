@@ -35,6 +35,12 @@ let library: WatermarkEntry[] = [
   entry("b", "@filippohano handle", "logo-b.png", 0.2, 0.05, 0.05, 0.3, 0.6),
 ];
 
+let history = [
+  { id: "h1", kind: "export", path: "/dev/sample.webm", createdAt: Math.floor(Date.now() / 1000) - 300, title: null, sourceUrl: null, platform: null, bytes: 1_200_000, duration: 9.7, exists: true, thumbPath: "/dev/logo-a.png" },
+  { id: "h2", kind: "download", path: "/dev/sample.webm", createdAt: Math.floor(Date.now() / 1000) - 3600, title: "Funny cat", sourceUrl: "https://www.tiktok.com/@a/video/1234567890123456789", platform: "tiktok", bytes: 3_100_000, duration: null, exists: true, thumbPath: "/dev/logo-b.png" },
+  { id: "h3", kind: "download", path: "/dev/gone.mp4", createdAt: Math.floor(Date.now() / 1000) - 90000, title: null, sourceUrl: "https://x.com/jack/status/20", platform: "twitter", bytes: 800_000, duration: null, exists: false, thumbPath: null },
+];
+
 const cancelled = new Set<string>();
 
 async function simulate(job: string, message: string, ms: number): Promise<void> {
@@ -114,6 +120,14 @@ mockIPC(
       case "download_link":
         await simulate("download", "Downloading…", 2400);
         return { path: "/dev/sample.webm", platform: "tiktok", title: null };
+      case "history_list":
+        return history;
+      case "history_remove":
+        history = history.filter((e) => e.id !== a.id);
+        return null;
+      case "history_clear":
+        history = [];
+        return null;
       case "download_dir":
         return "/Users/you/Movies/FillernCut/Footage";
       case "cancel_job":
@@ -130,6 +144,7 @@ mockIPC(
       case "plugin:resources|close":
         return null;
       case "plugin:dialog|open":
+        if (a.options?.multiple) return ["/dev/sample2.webm", "/dev/sample3.webm"];
         return (a.options?.filters?.[0]?.name === "Image" ? "/dev/logo-a.png" : "/dev/sample.webm") as string;
       case "plugin:dialog|save":
         return "/Users/you/Movies/sample-cut.mp4";

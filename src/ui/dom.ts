@@ -50,10 +50,17 @@ export function raf<A extends unknown[]>(fn: (...args: A) => void): (...args: A)
   };
 }
 
-export function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: number): (...args: A) => void {
+export interface Debounced<A extends unknown[]> {
+  (...args: A): void;
+  cancel(): void;
+}
+
+export function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: number): Debounced<A> {
   let t: ReturnType<typeof setTimeout> | undefined;
-  return (...args: A) => {
+  const wrapped = ((...args: A) => {
     clearTimeout(t);
     t = setTimeout(() => fn(...args), ms);
-  };
+  }) as Debounced<A>;
+  wrapped.cancel = () => clearTimeout(t);
+  return wrapped;
 }

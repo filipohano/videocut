@@ -13,4 +13,8 @@ ffmpeg -hide_banner -loglevel error -y -f lavfi -i "color=c=0xf0b24a:s=500x100,d
 
 # A logo with lots of transparent margin (visible part is the middle 40% x 40%)
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i "color=c=0xe0457b:s=320x160,format=rgba,drawtext=text='PADDED':fontcolor=white:fontsize=60:x=(w-text_w)/2:y=(h-text_h)/2,pad=800:400:240:120:color=black@0" -frames:v 1 public/dev/logo-padded.png
+
+# extra clips so the batch dialog has something to chew on
+cp public/dev/sample.webm public/dev/sample2.webm
+cp public/dev/sample.webm public/dev/sample3.webm
 echo "Dev assets written to public/dev/"

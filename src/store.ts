@@ -28,6 +28,8 @@ export type Topic =
   | "watermarks" // active watermarks changed
   | "library" // saved watermark list changed
   | "selection" // selected watermark changed
+  | "quality"
+  | "undo" // undo/redo availability changed
   | "settings"
   | "update"
   | "busy"

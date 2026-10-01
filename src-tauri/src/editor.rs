@@ -244,6 +244,16 @@ pub async fn export_video<R: Runtime>(
         match res {
             Ok(()) => {
                 std::fs::rename(&partial, &final_out).map_err(|e| e.to_string())?;
+                crate::history::record(
+                    &state,
+                    fillerncut_core::HistoryKind::Export,
+                    &final_out,
+                    fillerncut_core::NewEntry {
+                        duration: Some(total),
+                        ..Default::default()
+                    },
+                )
+                .await;
                 return Ok(final_out.to_string_lossy().into_owned());
             }
             Err(e) => {

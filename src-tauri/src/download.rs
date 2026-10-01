@@ -94,6 +94,20 @@ pub async fn download_link<R: Runtime>(
 
     let (path, title) = result;
     allow_asset(&app, &path);
+    crate::history::record(
+        &state,
+        fillerncut_core::HistoryKind::Download,
+        &path,
+        fillerncut_core::NewEntry {
+            title: title.clone(),
+            source_url: Some(url.trim().to_string()),
+            platform: serde_json::to_value(platform)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from)),
+            ..Default::default()
+        },
+    )
+    .await;
     Ok(DownloadResult {
         path: path.to_string_lossy().into_owned(),
         platform,

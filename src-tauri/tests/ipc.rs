@@ -342,3 +342,58 @@ fn app_info_reports_an_h264_encoder() {
         Some("videotoolbox" | "libx264")
     ));
 }
+
+#[test]
+fn exports_are_recorded_in_the_history_with_a_preview_image() {
+    let Some(h) = harness() else { return };
+    assert!(call(&h.win, "history_list", json!({}))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let src = make_video(h.dir.path(), "src.mp4", "320x240", 2);
+    let out = h.dir.path().join("out.mp4").to_string_lossy().into_owned();
+    let spec = json!({ "spec": {
+        "input": src, "output": out, "sourceWidth": 320, "sourceHeight": 240, "sourceDuration": 2.0,
+        "hasAudio": true, "audioCodec": "aac", "crop": null, "trimStart": null, "trimEnd": null,
+        "watermarks": [], "quality": 50 } });
+    call(&h.win, "export_video", spec).unwrap();
+
+    let list = call(&h.win, "history_list", json!({})).unwrap();
+    let list = list.as_array().unwrap();
+    assert_eq!(list.len(), 1);
+    let e = &list[0];
+    assert_eq!(e["kind"], "export");
+    assert_eq!(e["path"], json!(out));
+    assert_eq!(e["exists"], true);
+    assert!(e["bytes"].as_u64().unwrap() > 0);
+    assert_eq!(e["duration"], 2.0);
+    let thumb = e["thumbPath"].as_str().expect("a preview image was made");
+    assert!(Path::new(thumb).is_file());
+
+    // Removing the entry keeps the video; clearing empties the list.
+    call(&h.win, "history_remove", json!({ "id": e["id"] })).unwrap();
+    assert!(call(&h.win, "history_list", json!({}))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(Path::new(&out).is_file());
+    call(&h.win, "history_clear", json!({})).unwrap();
+}
+
+#[test]
+fn a_failed_export_leaves_no_history_entry() {
+    let Some(h) = harness() else { return };
+    let spec = json!({ "spec": {
+        "input": h.dir.path().join("missing.mp4"), "output": h.dir.path().join("o.mp4"),
+        "sourceWidth": 320, "sourceHeight": 240, "sourceDuration": 2.0,
+        "hasAudio": false, "audioCodec": null, "crop": null, "trimStart": null, "trimEnd": null,
+        "watermarks": [], "quality": 50 } });
+    assert!(call(&h.win, "export_video", spec).is_err());
+    assert!(call(&h.win, "history_list", json!({}))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .is_empty());
+}

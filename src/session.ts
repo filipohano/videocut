@@ -21,6 +21,7 @@ export function setView(view: "start" | "editor"): void {
   $("#view-start").classList.toggle("hidden", view !== "start");
   $("#view-editor").classList.toggle("hidden", view !== "editor");
   $("#btn-new").classList.toggle("hidden", view !== "editor");
+  $("#undo-group").classList.toggle("hidden", view !== "editor");
 }
 
 export function closeVideo(): void {

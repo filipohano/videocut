@@ -240,7 +240,7 @@ export function updateText(id: string, patch: Partial<TextStyle>): void {
   scheduleTextSave(wm, after.base64);
 }
 
-function scheduleTextSave(wm: ActiveWatermark, base64: string): void {
+export function scheduleTextSave(wm: ActiveWatermark, base64: string): void {
   const prior = textSaves.get(wm.id);
   if (prior) clearTimeout(prior.timer);
   const run = async () => {
