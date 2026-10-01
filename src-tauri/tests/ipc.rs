@@ -179,9 +179,11 @@ fn cancelling_an_export_stops_ffmpeg_and_leaves_no_files() {
         "watermarks": [], "quality": 100 } });
 
     let win = h.win.clone();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop2 = stop.clone();
     let canceller = std::thread::spawn(move || {
-        // Wait until the export has registered, then cancel it.
-        for _ in 0..100 {
+        // Keep cancelling until the export has registered and stops.
+        while !stop2.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(100));
             let _ = call(&win, "cancel_job", json!({ "job": "export" }));
         }
@@ -190,7 +192,8 @@ fn cancelling_an_export_stops_ffmpeg_and_leaves_no_files() {
     let err = call(&h.win, "export_video", spec).unwrap_err();
     assert_eq!(err, json!("Cancelled"));
     assert!(started.elapsed().as_secs() < 20, "cancel should be prompt");
-    drop(canceller);
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    canceller.join().unwrap();
     assert!(!Path::new(&out).exists());
     assert!(!h.dir.path().join("cancelled.partial.mp4").exists());
 

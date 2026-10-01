@@ -325,8 +325,10 @@ fn cancelling_a_download_kills_the_downloader_and_frees_the_slot() {
     std::fs::write(bin.join("slow.txt"), "").unwrap();
 
     let win = h.win.clone();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop2 = stop.clone();
     let t = std::thread::spawn(move || {
-        for _ in 0..60 {
+        while !stop2.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(100));
             let _ = call(&win, "cancel_job", json!({ "job": "download" }));
         }
@@ -338,7 +340,9 @@ fn cancelling_a_download_kills_the_downloader_and_frees_the_slot() {
     )
     .unwrap_err();
     assert_eq!(err, json!("Cancelled"));
-    drop(t);
+    // Stop the canceller *before* the next download, or it would cancel that too.
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    t.join().unwrap();
 
     // Slot is free again: a normal download now succeeds.
     std::fs::remove_file(bin.join("slow.txt")).unwrap();
