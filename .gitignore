@@ -1,0 +1,18 @@
+node_modules/
+dist/
+target/
+.DS_Store
+*.log
+
+# Sidecar binaries are fetched by scripts/fetch-binaries.sh, never committed
+src-tauri/binaries/
+src-tauri/gen/
+src-tauri/target/
+
+# Updater signing keys must never be committed
+*.key
+*.key.pub.bak
+.env
+
+# Generated sample media for the browser dev mock
+public/dev/

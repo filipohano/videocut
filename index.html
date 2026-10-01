@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FillernCut</title>
+    <link rel="icon" href="/icon.png" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <img class="brand-icon" src="/icon.png" alt="" width="36" height="36" />
+          <div>
+            <h1>FillernCut</h1>
+            <p>Download, crop, trim and watermark — 100% local, powered by ffmpeg.</p>
+          </div>
+        </div>
+        <div class="top-actions">
+          <button id="btn-update-chip" class="chip warn hidden" title="A newer version is available"></button>
+          <button id="btn-new" class="btn hidden">New video</button>
+          <button id="btn-settings" class="btn">Settings</button>
+        </div>
+      </header>
+
+      <div id="update-banner" class="banner hidden" role="status"></div>
+
+      <main>
+        <!-- START -->
+        <section id="view-start">
+          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Choose a video">
+            <p class="dz-title"><strong>Click to choose a video</strong> or drag &amp; drop it here</p>
+            <p class="muted small">MP4, MOV, MKV, WebM, AVI…</p>
+          </div>
+
+          <div class="card link-card">
+            <h2 class="section-title center">Or paste a link</h2>
+            <form id="link-form" class="link-row" autocomplete="off">
+              <div class="input-wrap">
+                <input id="link-input" type="text" spellcheck="false" autocapitalize="off" autocorrect="off"
+                  placeholder="https://www.tiktok.com/@user/video/1234567890123456789" />
+                <span id="link-platform" class="platform-badge hidden"></span>
+              </div>
+              <button id="link-go" class="btn primary" type="submit">Fetch</button>
+            </form>
+            <div id="link-progress" class="progress-row hidden">
+              <div class="bar"><div class="bar-fill"></div></div>
+              <span class="progress-label muted small"></span>
+              <button id="link-cancel" class="btn small" type="button">Cancel</button>
+            </div>
+            <p class="muted small center hint">
+              TikTok, Instagram and X/Twitter links. TikTok downloads are source quality without the watermark,
+              and photo posts are built into a video with their sound.
+            </p>
+          </div>
+        </section>
+
+        <!-- EDITOR -->
+        <section id="view-editor" class="hidden">
+          <div class="editor">
+            <div class="preview-col">
+              <div id="stage-wrap" class="stage-wrap">
+                <div id="stage" class="stage">
+                  <video id="video" playsinline preload="auto"></video>
+                  <div id="crop-dim" class="crop-dim"></div>
+                  <div id="crop-frame" class="crop-frame"><i></i><i></i><i></i><i></i></div>
+                  <div id="wm-layer" class="wm-layer"></div>
+                  <div id="handle-layer" class="handle-layer"></div>
+                </div>
+              </div>
+              <div class="player">
+                <button id="btn-play" class="play-btn" aria-label="Play / pause">
+                  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path id="play-icon" fill="currentColor" d="M8 5v14l11-7z" /></svg>
+                </button>
+                <div class="seek">
+                  <div id="trim-range" class="trim-range"></div>
+                  <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek" />
+                </div>
+                <span id="clock" class="clock muted small">0:00 / 0:00</span>
+              </div>
+              <p id="source-name" class="muted small source-name"></p>
+            </div>
+
+            <div class="controls-col">
+              <section class="card" id="panel-crop">
+                <h2 class="section-title">Crop</h2>
+                <div class="grid4">
+                  <label>X <input id="crop-x" type="text" inputmode="numeric" /></label>
+                  <label>Y <input id="crop-y" type="text" inputmode="numeric" /></label>
+                  <label>W <input id="crop-w" type="text" inputmode="numeric" /></label>
+                  <label>H <input id="crop-h" type="text" inputmode="numeric" /></label>
+                </div>
+                <div class="row">
+                  <label class="stack">Aspect ratio <select id="crop-aspect"></select></label>
+                  <button id="crop-reset" class="btn">Reset to full frame</button>
+                </div>
+              </section>
+
+              <section class="card" id="panel-trim">
+                <h2 class="section-title">Trim <span class="muted">(optional)</span></h2>
+                <div class="row">
+                  <label class="stack">Start (s) <input id="trim-start" type="text" inputmode="decimal" /></label>
+                  <label class="stack">End (s) <input id="trim-end" type="text" inputmode="decimal" /></label>
+                  <button id="trim-set-start" class="btn">Set start = playhead</button>
+                  <button id="trim-set-end" class="btn">Set end = playhead</button>
+                </div>
+              </section>
+
+              <section class="card" id="panel-wm">
+                <h2 class="section-title">Watermarks</h2>
+                <div class="wm-toolbar">
+                  <div class="menu-host">
+                    <button id="wm-menu-btn" class="btn primary" aria-haspopup="true" aria-expanded="false">
+                      Add watermark <span aria-hidden="true">▾</span>
+                    </button>
+                    <div id="wm-menu" class="menu hidden" role="menu"></div>
+                  </div>
+                  <span class="muted small">Your library is saved and available every time you open the app.</span>
+                </div>
+                <div id="wm-active" class="wm-active"></div>
+              </section>
+
+              <section class="card" id="panel-output">
+                <h2 class="section-title">Output quality</h2>
+                <label class="stack">Codec
+                  <select id="codec"></select>
+                </label>
+                <label class="stack">Quality <span class="muted">(higher = better)</span>
+                  <div class="slider-row"><input id="quality" type="range" min="1" max="100" step="1" /><output id="quality-out"></output></div>
+                </label>
+                <p id="codec-help" class="muted small"></p>
+                <p id="output-summary" class="small"></p>
+              </section>
+
+              <div class="export-bar">
+                <div id="export-progress" class="progress-row hidden">
+                  <div class="bar"><div class="bar-fill"></div></div>
+                  <span class="progress-label small"></span>
+                  <button id="export-cancel" class="btn small">Cancel</button>
+                </div>
+                <button id="btn-export" class="btn primary big">Export video</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <dialog id="settings-dialog" class="dialog"></dialog>
+      <div id="overlay" class="overlay hidden"></div>
+      <div id="drop-hint" class="drop-hint hidden">Drop a video to edit, or an image to add it to your watermarks</div>
+      <div id="toasts" class="toasts" aria-live="polite"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

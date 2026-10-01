@@ -1,0 +1,67 @@
+name: Release
+
+# Push a tag like v0.2.0 (after `node scripts/version.mjs 0.2.0`) to publish a release.
+# Installed copies of the app pick it up via the update check at launch.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: Build and publish (macOS, Apple silicon)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version files match the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/version.mjs --check "${{ github.ref_name }}"
+
+      - name: Updater signing is configured
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if grep -q REPLACE_WITH_UPDATER_PUBLIC_KEY src-tauri/tauri.conf.json; then
+            echo "::error::src-tauri/tauri.conf.json still has the placeholder updater key. Run: bash scripts/setup-updater.sh"
+            exit 1
+          fi
+          if [ -z "$KEY" ]; then
+            echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is missing. Run: bash scripts/setup-updater.sh"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+      - name: Fetch ffmpeg, ffprobe and yt-dlp (checksum-verified)
+        run: bash scripts/fetch-binaries.sh
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: FillernCut ${{ github.ref_name }}
+          releaseBody: |
+            ## Install
+            Download **FillernCut_*_aarch64.dmg**, drag the app to Applications.
+            The app isn't notarized, so the first time: right-click → **Open**
+            (or run `xattr -dr com.apple.quarantine /Applications/FillernCut.app`).
+
+            Installed copies update themselves — see Settings → Updates.
+          releaseDraft: false
+          prerelease: false
+          args: --target aarch64-apple-darwin

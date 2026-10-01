@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (typecheck, tests, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Versions are consistent
+        run: node scripts/version.mjs --check "v$(node -p "require('./package.json').version")"
+
+  rust:
+    name: Rust (fmt, clippy, tests with real ffmpeg)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: System packages (Tauri's Linux deps are only needed to compile and test)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libgtk-3-dev \
+            librsvg2-dev libssl-dev pkg-config ffmpeg
+      - run: npm ci && npm run build
+      - name: Placeholder sidecars (tauri-build only checks that they exist)
+        run: |
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          mkdir -p src-tauri/binaries
+          for b in ffmpeg ffprobe yt-dlp; do : > "src-tauri/binaries/$b-$host"; done
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
