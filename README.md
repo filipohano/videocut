@@ -36,8 +36,8 @@ On every launch FillernCut asks GitHub whether a newer release exists. Settings 
 
 Updates are signature-checked against the key built into the app, so only builds signed by this project install.
 
-The bundled downloader (**yt-dlp**) is refreshed separately in the background at launch (toggle in
-Settings → Downloads), because Instagram/X/TikTok break it often.
+The downloader (**yt-dlp**) isn't part of the app: it is downloaded (checksum-verified) on first launch and
+refreshed in the background at launch (toggle in Settings → Downloads), because Instagram/X/TikTok break it often.
 
 ## Downloads: logins and limits
 
@@ -57,7 +57,7 @@ Prerequisites: an Apple-silicon Mac with Xcode command-line tools, [Node 22](htt
 
 ```bash
 npm install
-npm run setup          # downloads ffmpeg, ffprobe and yt-dlp (checksum-verified) into src-tauri/binaries/
+npm run setup          # downloads ffmpeg and ffprobe (checksum-verified) into src-tauri/binaries/
 npm run tauri dev      # runs the real app with hot reload
 ```
 

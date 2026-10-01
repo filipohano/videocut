@@ -126,7 +126,15 @@ async fn download_with_ytdlp<R: Runtime>(
         cookies_browser: settings.cookies_browser,
     };
     let args = build_args(&opts);
-    let program = bins::ytdlp(&state.data_dir);
+    if !bins::ytdlp_is_managed(&state.data_dir) {
+        emit_progress(
+            app,
+            JOB,
+            None,
+            Some("Setting up the downloader (first time only)…"),
+        );
+    }
+    let program = crate::settings::ensure_ytdlp(&state.data_dir).await?;
 
     let mut cmd = Command::new(&program);
     cmd.args(&args)

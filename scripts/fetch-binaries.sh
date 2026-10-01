@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Downloads the programs FillernCut bundles inside the app (Tauri "sidecars"):
 #   ffmpeg + ffprobe  – https://ffmpeg.martin-riedl.de (static macOS arm64 build)
-#   yt-dlp            – https://github.com/yt-dlp/yt-dlp (official standalone macOS build)
+#   (yt-dlp is NOT bundled: the app downloads it itself on first launch — see src-tauri/src/settings.rs)
 # Every download is verified against the publisher's SHA-256 checksum.
 #
 #   npm run setup            fetch if missing
@@ -52,16 +52,6 @@ if need ffmpeg || need ffprobe; then
     install -m 755 "$tmp/$tool/$tool" "$DEST/$tool-$TRIPLE"
   done
   echo "${dir##*/macos/arm64/}" > "$DEST/ffmpeg.version"
-fi
-
-# ───────── yt-dlp ─────────
-if need yt-dlp; then
-  REL="https://github.com/yt-dlp/yt-dlp/releases/latest/download"
-  curl -fSL --retry 3 -o "$tmp/yt-dlp_macos" "$REL/yt-dlp_macos"
-  curl -fsSL --retry 3 -o "$tmp/SHA2-256SUMS" "$REL/SHA2-256SUMS"
-  expected="$(grep -E ' yt-dlp_macos$' "$tmp/SHA2-256SUMS" | cut -d' ' -f1)"
-  verify "$tmp/yt-dlp_macos" "$expected" "yt-dlp_macos"
-  install -m 755 "$tmp/yt-dlp_macos" "$DEST/yt-dlp-$TRIPLE"
 fi
 
 # Sanity check: the right architecture.

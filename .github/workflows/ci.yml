@@ -51,7 +51,7 @@ jobs:
         run: |
           host="$(rustc -vV | sed -n 's/^host: //p')"
           mkdir -p src-tauri/binaries
-          for b in ffmpeg ffprobe yt-dlp; do : > "src-tauri/binaries/$b-$host"; done
+          for b in ffmpeg ffprobe; do : > "src-tauri/binaries/$b-$host"; done
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace

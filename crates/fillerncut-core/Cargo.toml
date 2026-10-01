@@ -1,6 +1,6 @@
 [package]
 name = "fillerncut-core"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Pure logic for FillernCut: link parsing, ffmpeg argument building, library + settings storage"
 license = "MIT"

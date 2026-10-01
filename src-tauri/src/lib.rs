@@ -56,15 +56,13 @@ pub fn run() {
 
             editor::prune_preview_cache(&cache_dir);
 
-            // Instagram / X / TikTok break yt-dlp regularly, so refresh it in
-            // the background on every launch (setting-controlled).
-            if auto_update_ytdlp {
-                tauri::async_runtime::spawn(async move {
-                    // Make sure the writable copy exists before updating it.
-                    let _ = bins::ytdlp(&data_dir);
+            // Fetch the downloader on first launch, and (setting-controlled) refresh
+            // it in the background every launch: Instagram / X / TikTok break it often.
+            tauri::async_runtime::spawn(async move {
+                if settings::ensure_ytdlp(&data_dir).await.is_ok() && auto_update_ytdlp {
                     let _ = settings::run_ytdlp_update(&data_dir).await;
-                });
-            }
+                }
+            });
             Ok(())
         })
         .run(tauri::generate_context!())

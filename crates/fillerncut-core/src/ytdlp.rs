@@ -60,6 +60,15 @@ pub fn build_args(opts: &DownloadOptions) -> Vec<String> {
     a
 }
 
+/// Find the SHA-256 for `file_name` in a `SHA2-256SUMS` listing (`<hash>  <name>` per line).
+pub fn checksum_for(sums: &str, file_name: &str) -> Option<String> {
+    sums.lines().find_map(|line| {
+        let (hash, name) = line.trim().split_once(char::is_whitespace)?;
+        let name = name.trim().trim_start_matches('*');
+        (name == file_name && hash.len() == 64).then(|| hash.to_ascii_lowercase())
+    })
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum YtDlpLine {
     Progress {
@@ -167,6 +176,17 @@ mod tests {
             ffmpeg_dir: Some("/App/Contents/MacOS".into()),
             cookies_browser: None,
         }
+    }
+
+    #[test]
+    fn finds_checksums_by_exact_file_name() {
+        let h1 = "a".repeat(64);
+        let h2 = "B".repeat(64);
+        let sums = format!("{h1}  yt-dlp\n{h2}  yt-dlp_macos\n{h1} *yt-dlp_macos_legacy\n");
+        assert_eq!(checksum_for(&sums, "yt-dlp_macos"), Some("b".repeat(64)));
+        assert_eq!(checksum_for(&sums, "yt-dlp_macos_legacy"), Some(h1));
+        assert_eq!(checksum_for(&sums, "nope"), None);
+        assert_eq!(checksum_for("short  yt-dlp_macos", "yt-dlp_macos"), None);
     }
 
     #[test]

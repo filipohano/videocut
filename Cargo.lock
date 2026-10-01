@@ -834,13 +834,14 @@ dependencies = [
 
 [[package]]
 name = "fillerncut"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fillerncut-core",
  "futures-util",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -854,7 +855,7 @@ dependencies = [
 
 [[package]]
 name = "fillerncut-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "imagesize",
  "serde",

@@ -1,6 +1,6 @@
 [package]
 name = "fillerncut"
-version = "0.1.0"
+version = "0.1.1"
 description = "Download, crop, trim and watermark videos"
 authors = ["filipohano"]
 edition = "2021"
@@ -24,6 +24,7 @@ tokio = { version = "1", features = ["process", "io-util", "sync", "time", "fs",
 tokio-util = "0.7"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures-util = "0.3"
+sha2 = "0.10"
 url = "2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
