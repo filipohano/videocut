@@ -4,6 +4,7 @@ use fillerncut_core::ytdlp::checksum_for;
 use fillerncut_core::Settings;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::State;
 
@@ -27,6 +28,8 @@ pub fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<S
 
 const YTDLP_RELEASE: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download";
 
+static YTDLP_HEALTHY: AtomicBool = AtomicBool::new(false);
+
 static INSTALL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// The downloader (yt-dlp) isn't bundled: it's a self-contained Python app whose
@@ -36,9 +39,21 @@ pub async fn ensure_ytdlp(data_dir: &Path) -> Result<PathBuf, String> {
     let _guard = INSTALL_LOCK.lock().await;
     let existing = bins::ytdlp(data_dir);
     if existing.is_absolute() && existing.is_file() {
-        return Ok(existing);
+        // A managed copy might be broken, e.g. one left behind by an older
+        // FillernCut that bundled (and thereby re-signed) yt-dlp. Check once per
+        // launch that it really starts, and replace it if not.
+        if !bins::ytdlp_is_managed(data_dir) || YTDLP_HEALTHY.load(Ordering::Relaxed) {
+            return Ok(existing);
+        }
+        if jobs::capture(&existing, &["--version"]).await.is_ok() {
+            YTDLP_HEALTHY.store(true, Ordering::Relaxed);
+            return Ok(existing);
+        }
+        let _ = std::fs::remove_file(&existing);
     }
-    install_ytdlp(data_dir).await
+    let path = install_ytdlp(data_dir).await?;
+    YTDLP_HEALTHY.store(true, Ordering::Relaxed);
+    Ok(path)
 }
 
 async fn install_ytdlp(data_dir: &Path) -> Result<PathBuf, String> {
@@ -86,10 +101,7 @@ async fn install_ytdlp(data_dir: &Path) -> Result<PathBuf, String> {
 
 #[tauri::command]
 pub async fn ytdlp_version(state: State<'_, AppState>) -> Result<String, String> {
-    let path = bins::ytdlp(&state.data_dir);
-    if !path.is_absolute() {
-        return Err("not installed yet".into());
-    }
+    let path = ensure_ytdlp(&state.data_dir).await?;
     jobs::capture(&path, &["--version"])
         .await
         .map(|v| v.trim().to_string())

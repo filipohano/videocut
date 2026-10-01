@@ -104,6 +104,7 @@ fn serve(mut s: std::net::TcpStream, video: &[u8], imgs: &[Vec<u8>], music: &[u8
 
 const FAKE_YTDLP: &str = r#"#!/usr/bin/env bash
 here="$(cd "$(dirname "$0")" && pwd)"
+[ "$1" = "--version" ] && { echo 2026.01.01; exit 0; }
 printf '%s\n' "$@" > "$here/args.txt"
 [ -f "$here/slow.txt" ] && exec sleep 30
 if [ -f "$here/fail.txt" ]; then cat "$here/fail.txt" >&2; exit 1; fi
@@ -358,4 +359,29 @@ fn cancelling_a_download_kills_the_downloader_and_frees_the_slot() {
 #[test]
 fn fixture_host_is_local() {
     assert!(fixture().host.starts_with("http://127.0.0.1:"));
+}
+
+#[test]
+fn a_broken_downloader_left_by_an_old_version_is_replaced() {
+    let Some(h) = harness() else { return };
+    let bin = h.dir.path().join("data/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    // What 0.1.0 left behind: present and executable, but crashes on start.
+    let broken = bin.join("yt-dlp");
+    std::fs::write(
+        &broken,
+        "#!/usr/bin/env bash\necho 'Failed to load Python shared library' >&2\nexit 1\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // Reinstalling needs the real network, so just check the broken copy is
+    // detected and removed (the download itself may or may not succeed here).
+    let _ = call(&h.win, "ytdlp_version", json!({}));
+    let content = std::fs::read_to_string(&broken).unwrap_or_default();
+    assert!(
+        !content.contains("Failed to load Python"),
+        "the broken copy must not be kept"
+    );
 }
