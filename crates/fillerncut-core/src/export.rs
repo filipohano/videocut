@@ -506,6 +506,8 @@ pub fn build_preview_args(input: &str, output: &str, encoder: Encoder, has_audio
         a.push("-an".into());
     }
     a.extend(encoder.video_args(2_500_000));
+    // A keyframe every ~0.4 s: seeking (scrubbing the timeline) never has to decode far back.
+    a.extend(s(&["-g", "12", "-keyint_min", "12"]));
     a.extend(s(&["-pix_fmt", "yuv420p", "-movflags", "+faststart", output]));
     a
 }
@@ -1035,6 +1037,7 @@ mod tests {
         let a = build_preview_args("/in/x.mkv", "/tmp/p.mp4", Encoder::Libx264, true);
         assert!(arg_after(&a, "-vf").contains("min(720,ih)"));
         assert_eq!(arg_after(&a, "-c:a"), "aac");
+        assert_eq!(arg_after(&a, "-g"), "12", "short GOP for smooth scrubbing");
         let silent = build_preview_args("/in/x.mkv", "/tmp/p.mp4", Encoder::Libx264, false);
         assert!(silent.contains(&"-an".to_string()));
     }

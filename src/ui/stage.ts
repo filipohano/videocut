@@ -319,8 +319,35 @@ export function initStage(): Stage {
   playBtn.addEventListener("click", toggle);
   video.addEventListener("click", toggle);
 
+  // Scrubbing: dragging the slider fires dozens of events a second. Asking the video to
+  // seek for each one floods the decoder (which crashed the app with some codecs), so only
+  // one seek is ever in flight; the latest wanted position is applied when it finishes.
+  let wantedTime: number | null = null;
+  function seekSoon(t: number): void {
+    wantedTime = t;
+    if (!video.seeking) flushSeek();
+  }
+  function flushSeek(): void {
+    if (wantedTime === null) return;
+    const t = wantedTime;
+    wantedTime = null;
+    video.currentTime = t;
+  }
+  video.addEventListener("seeked", flushSeek);
+
+  let resumeAfterScrub = false;
+  seek.addEventListener("pointerdown", () => {
+    resumeAfterScrub = !video.paused;
+    video.pause();
+  });
+  const endScrub = () => {
+    if (resumeAfterScrub) void video.play();
+    resumeAfterScrub = false;
+  };
+  seek.addEventListener("pointerup", endScrub);
+  seek.addEventListener("pointercancel", endScrub);
   seek.addEventListener("input", () => {
-    if (duration > 0) video.currentTime = (Number(seek.value) / 1000) * duration;
+    if (duration > 0) seekSoon((Number(seek.value) / 1000) * duration);
   });
 
   // ───────── app volume (preview only — never changes the exported video) ─────────

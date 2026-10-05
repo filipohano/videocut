@@ -6,5 +6,6 @@ resolver = "2"
 codegen-units = 1
 lto = true
 opt-level = "s"
-panic = "abort"
-strip = true
+# A Rust panic in one task/command shouldn't kill the whole app, and crash reports
+# should show function names.
+strip = "debuginfo"

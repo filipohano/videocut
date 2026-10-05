@@ -13,6 +13,9 @@ import { showOverlay } from "./ui/overlay";
 import type { Stage } from "./ui/stage";
 import { toast } from "./ui/toast";
 
+/** Video codecs the macOS webview plays reliably (including seeking). */
+const NATIVE_CODECS = new Set(["h264", "hevc", "prores", "mpeg4"]);
+
 let stage: Stage;
 
 export function initSession(s: Stage): void {
@@ -82,12 +85,15 @@ export async function openVideo(path: string): Promise<boolean> {
       await stage.loadPhoto(playUrl);
     } else {
       try {
+        // WebKit is solid with these; anything else (VP9, AV1, VP8…) can stutter or
+        // misbehave when scrubbing, so those get a small H.264 preview straight away.
+        if (!NATIVE_CODECS.has(info.videoCodec ?? "")) throw new Error("preview copy needed");
         await stage.load(playUrl);
       } catch {
         // WKWebView can't play every container/codec: make a small H.264 proxy
         // for the preview. Export always reads the original file.
         overlay.setTitle("Preparing a preview…");
-        overlay.setMessage("This format can't be played directly, so a lightweight copy is made for previewing. Your export still uses the original.");
+        overlay.setMessage("A lightweight copy is made so previewing and scrubbing stay smooth. Your export still uses the original, full-quality file.");
         const proxy = await withProgress("preview", overlay.bar, overlay.label, () => api.makePreview(path, info.hasAudio, info.duration));
         playUrl = convertFileSrc(proxy);
         await stage.load(playUrl);
