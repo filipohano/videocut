@@ -1343,3 +1343,11 @@ body.is-photo .player,
 body.is-photo #panel-trim {
   display: none;
 }
+
+/* After a successful export: grey until something is edited. */
+.btn.primary.is-finished:disabled {
+  background: var(--panel-2, #3a3a3f);
+  color: var(--muted, #9a9aa2);
+  border-color: transparent;
+  opacity: 1;
+}

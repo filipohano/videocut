@@ -4,7 +4,7 @@ import { basename } from "../lib/format";
 import { buildExportSpec } from "../lib/spec";
 import { withProgress } from "../progress";
 import { store } from "../store";
-import { markClean } from "../undo";
+import { isDirty, markClean, onUndoChange } from "../undo";
 import { flushTextSaves } from "../watermarkOps";
 import { $ } from "./dom";
 import { toast } from "./toast";
@@ -16,11 +16,25 @@ export function initExportBar(): void {
   const label = $(".progress-label", row);
 
   $("#export-cancel").addEventListener("click", () => void api.cancelJob("export"));
-  store.on("busy", () => {
-    btn.disabled = store.busy;
-  });
+  // True from a successful export until the next edit (or a new file).
+  let finished = false;
+  const render = () => {
+    const v = store.video;
+    btn.disabled = store.busy || finished;
+    btn.classList.toggle("is-finished", finished);
+    if (finished) btn.textContent = "Export finished";
+    else if (v) btn.textContent = v.info.isImage ? "Export photo" : "Export video";
+  };
+  store.on("busy", render);
   store.on("video", () => {
-    if (store.video) btn.textContent = store.video.info.isImage ? "Export photo" : "Export video";
+    finished = false;
+    render();
+  });
+  onUndoChange(() => {
+    if (finished && isDirty()) {
+      finished = false;
+      render();
+    }
   });
 
   btn.addEventListener("click", async () => {
@@ -50,6 +64,7 @@ export function initExportBar(): void {
       await flushTextSaves();
       const saved = await withProgress("export", bar, label, () => api.exportVideo(buildExportSpec(v, output!)), v.info.isImage ? "Saving…" : "Exporting…");
       markClean();
+      finished = true;
       toast(`Saved ${basename(saved)}`, {
         kind: "success",
         timeout: 12000,
@@ -61,6 +76,7 @@ export function initExportBar(): void {
     } finally {
       row.classList.add("hidden");
       store.setBusy(false);
+      render();
     }
   });
 }
