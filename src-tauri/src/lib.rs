@@ -48,6 +48,8 @@ pub fn register_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
 /// webview's text-field undo; ours is forwarded to the app (`menu-undo` / `menu-redo`).
 fn build_menu<R: Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
     let new = MenuItem::with_id(handle, "new", "New Video or Photo", true, Some("CmdOrCtrl+N"))?;
+    // A menu item holds one shortcut, so ⌘R is a second item that does the same.
+    let new_alt = MenuItem::with_id(handle, "new-alt", "Start Over", true, Some("CmdOrCtrl+R"))?;
     let open = MenuItem::with_id(handle, "open", "Open…", true, Some("CmdOrCtrl+O"))?;
     let undo = MenuItem::with_id(handle, "undo", "Undo", true, Some("CmdOrCtrl+Z"))?;
     let redo = MenuItem::with_id(handle, "redo", "Redo", true, Some("CmdOrCtrl+Shift+Z"))?;
@@ -71,6 +73,7 @@ fn build_menu<R: Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>
         true,
         &[
             &new,
+            &new_alt,
             &open,
             &sep()?,
             &PredefinedMenuItem::close_window(handle, None)?,
@@ -107,7 +110,7 @@ pub fn run() {
     register_commands(tauri::Builder::default())
         .menu(build_menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "new" => {
+            "new" | "new-alt" => {
                 let _ = app.emit("menu-new", ());
             }
             "open" => {

@@ -1,6 +1,6 @@
 [package]
 name = "fillerncut"
-version = "0.4.1"
+version = "0.4.2"
 description = "Download, crop, trim and watermark videos"
 authors = ["filipohano"]
 edition = "2021"

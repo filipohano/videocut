@@ -94,8 +94,8 @@ function initUndoUi(): void {
     if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey && e.key.toLowerCase() !== "z") return;
     if (document.querySelector("dialog[open]")) return;
     const key = e.key.toLowerCase();
-    // ⌘N: start over with a new video or photo; ⌘O: open one.
-    if (key === "n" && store.video) {
+    // ⌘N or ⌘R: start over with a new video or photo; ⌘O: open one.
+    if ((key === "n" || key === "r") && store.video) {
       e.preventDefault();
       void newMedia();
       return;

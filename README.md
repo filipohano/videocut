@@ -18,7 +18,7 @@ Download, crop, trim and watermark videos on your Mac — everything runs locall
   chronologically. Both folders, and "ask where to save", are in Settings.
 - **Sensible file sizes.** The export aims for the original's bitrate (adjusted for crop and the quality slider)
   instead of a fixed high quality, and shows the expected size before you export.
-- **⌘N** starts over with a new video or photo (it asks first if you have edits you haven't exported), **⌘O** opens
+- **⌘N** (or **⌘R**) starts over with a new video or photo (it asks first if you have edits you haven't exported), **⌘O** opens
   one.
 - **Undo / Redo** (⌘Z / ⇧⌘Z, or the arrows in the header) for crop, trim, quality and every watermark change.
   A drag or a burst of typing is one step.
