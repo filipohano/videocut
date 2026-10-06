@@ -131,12 +131,9 @@ fn install_fake_ytdlp(h: &Harness) -> PathBuf {
     bin_dir
 }
 
+/// Downloads are temporary and live in the cache folder.
 fn set_download_dir(h: &Harness) -> PathBuf {
-    let dir = h.dir.path().join("downloads");
-    let mut s = call(&h.win, "get_settings", json!({})).unwrap();
-    s["downloadDir"] = json!(dir);
-    call(&h.win, "save_settings", json!({ "settings": s })).unwrap();
-    dir
+    h.dir.path().join("cache").join("downloads")
 }
 
 fn collect_progress(h: &Harness) -> Arc<Mutex<Vec<f64>>> {
@@ -406,7 +403,7 @@ fn a_broken_downloader_left_by_an_old_version_is_replaced() {
 }
 
 #[test]
-fn downloads_go_to_the_footage_folder_and_are_named_by_time() {
+fn downloads_are_temporary_and_only_discarded_from_the_download_folder() {
     let Some(h) = harness() else { return };
     let dir = set_download_dir(&h);
     install_fake_ytdlp(&h);
@@ -416,30 +413,29 @@ fn downloads_go_to_the_footage_folder_and_are_named_by_time() {
         json!({ "url": "https://x.com/jack/status/20" }),
     )
     .unwrap();
+    let path = first["path"].as_str().unwrap().to_string();
     // The fake downloader chooses its own name; what matters is the folder.
-    assert!(Path::new(first["path"].as_str().unwrap()).starts_with(&dir));
+    assert!(Path::new(&path).starts_with(&dir), "{path}");
 
-    // Default folders are separate: Footage for downloads, Finished for exports.
-    let h2 = harness().unwrap();
-    let footage = call(&h2.win, "download_dir", json!({})).unwrap();
-    let finished = call(&h2.win, "export_dir", json!({})).unwrap();
-    assert!(footage.as_str().unwrap().ends_with("Footage"), "{footage}");
+    // A video from the user's own disk is never deleted...
+    let own = make_video(h.dir.path(), "mine.mp4", "64x64", 1);
+    assert_eq!(call(&h.win, "discard_download", json!({ "path": own })).unwrap(), json!(false));
+    assert!(Path::new(&own).is_file());
+    // ...but the temporary download is.
+    assert_eq!(call(&h.win, "discard_download", json!({ "path": path })).unwrap(), json!(true));
+    assert!(!Path::new(&path).exists());
+
+    // Exports still go to their own, permanent folder.
+    let finished = call(&h.win, "export_dir", json!({})).unwrap();
     assert!(finished.as_str().unwrap().ends_with("Finished"), "{finished}");
 }
 
 #[test]
-fn downloads_are_recorded_in_the_history_with_their_source() {
+fn downloads_are_not_kept_in_the_history() {
     let Some(h) = harness() else { return };
     fixture();
-    set_download_dir(&h);
     let url = format!("https://www.tiktok.com/@someone/photo/{PHOTO_ID}");
-    let res = call(&h.win, "download_link", json!({ "url": url })).unwrap();
+    call(&h.win, "download_link", json!({ "url": url })).unwrap();
     let list = call(&h.win, "history_list", json!({})).unwrap();
-    let e = &list.as_array().unwrap()[0];
-    assert_eq!(e["kind"], "download");
-    assert_eq!(e["path"], res["path"]);
-    assert_eq!(e["platform"], "tiktok");
-    assert_eq!(e["sourceUrl"], json!(url));
-    assert_eq!(e["title"], "Photos");
-    assert!(e["thumbPath"].is_string());
+    assert!(list.as_array().unwrap().is_empty(), "{list}");
 }

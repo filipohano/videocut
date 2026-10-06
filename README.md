@@ -13,9 +13,9 @@ Download, crop, trim and watermark videos on your Mac — everything runs locall
   shadow), and it's in the **Add watermark ▾** drop-down every time you open the app. Use several at once; each
   remembers its own position, size and opacity. Drag them anywhere in the preview, even so a PNG's transparent
   margin hangs outside the picture. The visible part always stays inside the frame.
-- **Tidy folders.** Downloads land in `~/Movies/FillernCut/Footage`, finished exports in
+- **Tidy folders.** Downloads are only temporary (deleted when you move on to the next video, and on the next launch); finished exports are kept in
   `~/Movies/FillernCut/Finished`, all named by date and time (`2026-10-01_15-42-07.mp4`) so they sort
-  chronologically. Both folders, and "ask where to save", are in Settings.
+  chronologically. The export folder and "ask where to save" are in Settings.
 - **Sensible file sizes.** The export aims for the original's bitrate (adjusted for crop and the quality slider)
   instead of a fixed high quality, and shows the expected size before you export.
 - **⌘N** (or **⌘R**) starts over with a new video or photo (it asks first if you have edits you haven't exported), **⌘O** opens

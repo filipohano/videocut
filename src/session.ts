@@ -57,9 +57,15 @@ export async function chooseAndOpen(): Promise<void> {
   if (typeof picked === "string") await openVideo(picked);
 }
 
+/** Downloads are temporary: delete the file once we move on. Other files are never touched. */
+function discardDownload(path: string | undefined): void {
+  if (path) void api.discardDownload(path).catch(() => {});
+}
+
 export function closeVideo(): void {
   if (store.busy) return;
   stage.pause();
+  discardDownload(store.video?.path);
   document.body.classList.remove("is-photo");
   store.video = null;
   store.selectedWatermark = null;
@@ -114,6 +120,7 @@ export async function openVideo(path: string): Promise<boolean> {
       imageFormat: extensionOf(path) === "png" ? "png" : "jpg",
     };
     document.body.classList.toggle("is-photo", info.isImage);
+    if (previous && previous.path !== path) discardDownload(previous.path);
     store.selectedWatermark = null;
     $("#source-name").textContent = info.isImage
       ? `${basename(path)} · ${info.width}×${info.height} · photo`

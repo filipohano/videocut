@@ -124,7 +124,7 @@ export function initSettingsDialog(): void {
     cookies.addEventListener("change", () => void save({ cookiesBrowser: (cookies.value || null) as CookieBrowser | null }));
 
     // ───────── folders ─────────
-    const folderRow = (label: string, hint: string, current: string | null, resolve: () => Promise<string>, key: "downloadDir" | "exportDir") => {
+    const folderRow = (label: string, hint: string, current: string | null, resolve: () => Promise<string>, key: "exportDir") => {
       const path = h("span", { class: "path grow" }, current ?? "…");
       if (!current) resolve().then((d) => (path.textContent = d)).catch(() => {});
       const choose = h("button", { class: "btn small" }, "Choose…");
@@ -147,7 +147,6 @@ export function initSettingsDialog(): void {
         h("div", { class: "set-row" }, path, choose, reset),
       );
     };
-    const footageRow = folderRow("Raw footage", "Downloaded videos land here, untouched.", s.downloadDir, api.downloadDir, "downloadDir");
     const finishedRow = folderRow("Finished videos", "Exports land here. Files are named by date and time, e.g. 2026-10-01_15-42-07.mp4.", s.exportDir, api.exportDir, "exportDir");
     const askRow = h(
       "label",
@@ -205,7 +204,7 @@ export function initSettingsDialog(): void {
             "Instagram (and some X posts) need you to be logged in. Pick the browser you're logged into; cookies are only read locally by the downloader and never leave your Mac. Safari needs Full Disk Access for FillernCut (System Settings → Privacy & Security).",
           ),
         ),
-        h("section", { class: "set-section" }, h("h3", {}, "Folders"), footageRow, finishedRow, askRow),
+        h("section", { class: "set-section" }, h("h3", {}, "Folders"), finishedRow, askRow),
         h(
           "section",
           { class: "set-section" },

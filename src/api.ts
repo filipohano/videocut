@@ -68,7 +68,6 @@ export interface Settings {
   updateMode: UpdateMode;
   autoUpdateYtdlp: boolean;
   cookiesBrowser: CookieBrowser | null;
-  downloadDir: string | null;
   exportDir: string | null;
   askExportLocation: boolean;
   exportQuality: number;
@@ -157,7 +156,7 @@ export const api = {
   openUrl: (url: string) => invoke<void>("open_url", { url }),
 
   downloadLink: (url: string) => invoke<DownloadResult>("download_link", { url }),
-  downloadDir: () => invoke<string>("download_dir"),
+  discardDownload: (path: string) => invoke<boolean>("discard_download", { path }),
 
   libraryList: () => invoke<WatermarkEntry[]>("library_list"),
   libraryAdd: (path: string) => invoke<WatermarkEntry>("library_add", { path }),

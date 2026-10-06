@@ -25,7 +25,7 @@ pub fn register_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         editor::reveal_in_finder,
         editor::open_url,
         download::download_link,
-        download::download_dir,
+        download::discard_download,
         editor::export_dir,
         editor::estimate_export,
         history::history_list,
@@ -147,6 +147,7 @@ pub fn run() {
             app.manage(state);
 
             editor::prune_preview_cache(&cache_dir);
+            dirs::clear_downloads(&cache_dir);
 
             // Fetch the downloader on first launch, and (setting-controlled) refresh
             // it in the background every launch: Instagram / X / TikTok break it often.

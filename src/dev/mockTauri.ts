@@ -19,7 +19,6 @@ let settings: Settings = {
   updateMode: (params.get("mode") as Settings["updateMode"]) ?? "notify",
   autoUpdateYtdlp: true,
   cookiesBrowser: null,
-  downloadDir: null,
   exportDir: null,
   askExportLocation: false,
   exportQuality: 60,
@@ -139,8 +138,8 @@ mockIPC(
       case "history_clear":
         history = [];
         return null;
-      case "download_dir":
-        return "/Users/you/Movies/FillernCut/Footage";
+      case "discard_download":
+        return true;
       case "cancel_job":
         cancelled.add(a.job);
         return null;

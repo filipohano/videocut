@@ -49,8 +49,6 @@ pub struct Settings {
     pub auto_update_ytdlp: bool,
     /// Optional: let the downloader borrow the login from a browser.
     pub cookies_browser: Option<CookieBrowser>,
-    /// Where downloaded (raw) footage is saved. `None` = ~/Movies/FillernCut/Footage.
-    pub download_dir: Option<String>,
     /// Where finished exports go. `None` = ~/Movies/FillernCut/Finished.
     pub export_dir: Option<String>,
     /// Show a save dialog for every export instead of saving straight to the finished folder.
@@ -67,7 +65,6 @@ impl Default for Settings {
             update_mode: UpdateMode::Auto,
             auto_update_ytdlp: true,
             cookies_browser: None,
-            download_dir: None,
             export_dir: None,
             ask_export_location: false,
             export_quality: 60,
@@ -127,7 +124,7 @@ mod tests {
         let s = Settings {
             update_mode: UpdateMode::Notify,
             cookies_browser: Some(CookieBrowser::Safari),
-            download_dir: Some("/Users/me/Movies".into()),
+            export_dir: Some("/Users/me/Movies".into()),
             export_quality: 90,
             ..Settings::default()
         };
@@ -169,7 +166,7 @@ mod tests {
     fn json_shape_matches_what_the_frontend_sends() {
         let s: Settings = serde_json::from_str(
             r#"{"updateMode":"auto","autoUpdateYtdlp":false,"cookiesBrowser":"chrome",
-                "downloadDir":null,"exportDir":"/x","exportQuality":60}"#,
+                "exportDir":"/x","exportQuality":60}"#,
         )
         .unwrap();
         assert!(!s.auto_update_ytdlp);

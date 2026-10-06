@@ -51,11 +51,11 @@ fn http_client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Delete a downloaded video once the user is done with it. Files that aren't
+/// temporary downloads are never touched.
 #[tauri::command]
-pub fn download_dir<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> String {
-    crate::dirs::footage_dir(&app, &state)
-        .to_string_lossy()
-        .into_owned()
+pub fn discard_download(state: State<'_, AppState>, path: String) -> bool {
+    crate::dirs::discard_download(&state.cache_dir, Path::new(&path))
 }
 
 #[tauri::command]
@@ -65,7 +65,7 @@ pub async fn download_link<R: Runtime>(
     url: String,
 ) -> Result<DownloadResult, String> {
     let link = parse_link(&url).map_err(|e| e.to_string())?;
-    let out_dir = crate::dirs::footage_dir(&app, &state);
+    let out_dir = crate::dirs::downloads_dir(&state.cache_dir);
     std::fs::create_dir_all(&out_dir)
         .map_err(|e| format!("Can't create the download folder {}: {e}", out_dir.display()))?;
 
@@ -94,20 +94,7 @@ pub async fn download_link<R: Runtime>(
 
     let (path, title) = result;
     allow_asset(&app, &path);
-    crate::history::record(
-        &state,
-        fillerncut_core::HistoryKind::Download,
-        &path,
-        fillerncut_core::NewEntry {
-            title: title.clone(),
-            source_url: Some(url.trim().to_string()),
-            platform: serde_json::to_value(platform)
-                .ok()
-                .and_then(|v| v.as_str().map(String::from)),
-            ..Default::default()
-        },
-    )
-    .await;
+    // Not added to the history: the file is deleted once the export is done.
     Ok(DownloadResult {
         path: path.to_string_lossy().into_owned(),
         platform,
