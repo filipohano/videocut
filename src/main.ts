@@ -17,6 +17,7 @@ import { initCropPanel, initOutputPanel, initTrimPanel } from "./ui/panels";
 import { initSettingsDialog } from "./ui/settingsDialog";
 import { initStage } from "./ui/stage";
 import { initStart } from "./ui/start";
+import { shortcut } from "./lib/platform";
 import { toast } from "./ui/toast";
 import { initWatermarkPanel } from "./ui/watermarkPanel";
 
@@ -30,6 +31,11 @@ async function boot(): Promise<void> {
   store.settings = settings;
   store.appVersion = info.version;
   store.encoder = info.encoder;
+  store.encoders = info.encoders;
+  store.platform = info.platform;
+  document.body.dataset.platform = info.platform;
+  // Shortcut hints in tooltips follow the OS (⌘Z on a Mac, Ctrl+Z on Windows).
+  document.querySelectorAll<HTMLElement>("[title*='⌘']").forEach((el) => (el.title = shortcut(el.title, info.platform)));
 
   // Splash screen: with automatic updates on, check (and install) BEFORE the app opens.
   await launchGate();
@@ -91,13 +97,14 @@ function initUndoUi(): void {
   redoBtn.addEventListener("click", redo);
 
   document.addEventListener("keydown", (e) => {
+    if (e.key === "F5") return e.preventDefault(); // a reload would throw the edit away
     if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey && e.key.toLowerCase() !== "z") return;
     if (document.querySelector("dialog[open]")) return;
     const key = e.key.toLowerCase();
     // ⌘N or ⌘R: start over with a new video or photo; ⌘O: open one.
-    if ((key === "n" || key === "r") && store.video) {
-      e.preventDefault();
-      void newMedia();
+    if (key === "n" || key === "r") {
+      e.preventDefault(); // also stops the webview opening a new window / reloading
+      if (store.video) void newMedia();
       return;
     }
     if (key === "o") {

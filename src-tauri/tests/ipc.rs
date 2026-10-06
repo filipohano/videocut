@@ -337,10 +337,51 @@ fn app_info_reports_an_h264_encoder() {
     let Some(h) = harness() else { return };
     let info = call(&h.win, "app_info", json!({})).unwrap();
     assert_eq!(info["ffmpegFound"], true);
+    // Whatever is picked automatically is a real, working encoder from the offered list.
+    let offered: Vec<&str> = info["encoders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_str().unwrap())
+        .collect();
+    assert!(offered.contains(&"libx264"), "{offered:?}");
+    assert!(offered.contains(&info["encoder"].as_str().unwrap()));
     assert!(matches!(
-        info["encoder"].as_str(),
-        Some("videotoolbox" | "libx264")
+        info["platform"].as_str(),
+        Some("linux" | "macos" | "windows")
     ));
+}
+
+fn set_encoder(h: &Harness, id: &str) {
+    let mut s = call(&h.win, "get_settings", json!({})).unwrap();
+    s["encoder"] = json!(id);
+    call(&h.win, "save_settings", json!({ "settings": s })).unwrap();
+}
+
+#[test]
+fn the_encoder_choice_in_settings_decides_what_exports_start_with() {
+    let Some(h) = harness() else { return };
+    set_encoder(&h, "libx264");
+    let info = call(&h.win, "app_info", json!({})).unwrap();
+    assert_eq!(info["encoder"], "libx264");
+
+    // A GPU this PC can't use (or that ffmpeg doesn't have) falls back instead of failing.
+    set_encoder(&h, "nvenc");
+    let src = make_video(h.dir.path(), "src.mp4", "320x240", 1);
+    let out = h.dir.path().join("out.mp4").to_string_lossy().into_owned();
+    let spec = json!({ "spec": {
+        "input": src, "output": out, "sourceWidth": 320, "sourceHeight": 240, "sourceDuration": 1.0,
+        "hasAudio": true, "audioCodec": "aac", "crop": null,
+        "trimStart": null, "trimEnd": null, "watermarks": [], "quality": 60 } });
+    call(&h.win, "export_video", spec).expect("falls back to a working encoder");
+    assert!(std::path::Path::new(&out).is_file());
+
+    // An id nobody knows is reset to Automatic when saved.
+    set_encoder(&h, "warp-drive");
+    assert_eq!(
+        call(&h.win, "get_settings", json!({})).unwrap()["encoder"],
+        "auto"
+    );
 }
 
 #[test]

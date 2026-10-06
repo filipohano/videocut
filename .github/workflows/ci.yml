@@ -55,3 +55,26 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+
+  windows:
+    name: Windows (builds and unit tests)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci && npm run build
+      - name: Placeholder sidecars (tauri-build only checks that they exist)
+        run: |
+          mkdir -p src-tauri/binaries
+          for b in ffmpeg ffprobe; do : > "src-tauri/binaries/$b-x86_64-pc-windows-msvc.exe"; done
+      - run: cargo check --workspace
+      - run: cargo test -p fillerncut-core --lib
+      - run: cargo test -p fillerncut --lib

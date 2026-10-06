@@ -15,6 +15,17 @@ import type { MediaInfo, Settings, WatermarkEntry } from "../api";
 const params = new URLSearchParams(location.search);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const mockPlatform = (params.get("platform") as "macos" | "windows") ?? "macos";
+function mockAppInfo() {
+  const encoders =
+    mockPlatform === "windows"
+      ? [{ id: "nvenc", label: "NVIDIA NVENC (GPU)" }, { id: "amf", label: "AMD AMF (GPU)" }, { id: "libx264", label: "CPU (libx264)" }]
+      : [{ id: "videotoolbox", label: "Apple VideoToolbox (GPU)" }, { id: "libx264", label: "CPU (libx264)" }];
+  const choice = settings.encoder;
+  const first = encoders.find((e) => e.id === choice) ?? encoders[0];
+  return { version: "0.1.0", platform: mockPlatform, encoder: first.id, encoders, ffmpegFound: true };
+}
+
 let settings: Settings = {
   updateMode: (params.get("mode") as Settings["updateMode"]) ?? "notify",
   autoUpdateYtdlp: true,
@@ -23,6 +34,7 @@ let settings: Settings = {
   askExportLocation: false,
   exportQuality: 60,
   exportImageQuality: 90,
+  encoder: "auto",
 };
 
 const entry = (id: string, name: string, file: string, aspect: number, nx: number, ny: number, scale: number, opacity: number, content = { l: 0, t: 0, r: 1, b: 1 }): WatermarkEntry => ({
@@ -79,7 +91,7 @@ mockIPC(
     const a = (args ?? {}) as Record<string, any>;
     switch (cmd) {
       case "app_info":
-        return { version: "0.1.0", encoder: "videotoolbox", ffmpegFound: true };
+        return mockAppInfo();
       case "get_settings":
         return settings;
       case "save_settings":

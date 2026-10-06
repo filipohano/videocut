@@ -71,7 +71,7 @@ pub async fn run_ffmpeg(
     total_seconds: f64,
     on_progress: impl Fn(f64),
 ) -> Result<(), String> {
-    let mut child = Command::new(bins::ffmpeg())
+    let mut child = bins::hide_window(&mut Command::new(bins::ffmpeg()))
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -116,7 +116,7 @@ pub async fn run_ffmpeg(
 
 /// Run a short command and return its stderr (ffmpeg prints filter info there), whatever the exit code.
 pub async fn capture_stderr(program: &std::path::Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new(program)
+    let out = bins::hide_window(&mut Command::new(program))
         .args(args)
         .stdin(Stdio::null())
         .kill_on_drop(true)
@@ -128,7 +128,7 @@ pub async fn capture_stderr(program: &std::path::Path, args: &[&str]) -> Result<
 
 /// Run a short command to completion and capture stdout (ffprobe, `ffmpeg -encoders`, `yt-dlp --version`).
 pub async fn capture(program: &std::path::Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new(program)
+    let out = bins::hide_window(&mut Command::new(program))
         .args(args)
         .stdin(Stdio::null())
         .kill_on_drop(true)

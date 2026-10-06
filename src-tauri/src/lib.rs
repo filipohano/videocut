@@ -9,6 +9,7 @@ mod settings;
 mod state;
 
 pub use state::AppState;
+#[cfg(not(windows))]
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Builder, Emitter, Manager, Runtime};
 
@@ -44,6 +45,8 @@ pub fn register_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
     ])
 }
 
+/// On Windows there is no menu bar: the shortcuts (Ctrl+Z, Ctrl+N, …) are handled by the page itself.
+#[cfg(not(windows))]
 /// A menu with our own Undo / Redo. The default Edit menu would swallow ⌘Z for the
 /// webview's text-field undo; ours is forwarded to the app (`menu-undo` / `menu-redo`).
 fn build_menu<R: Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
@@ -107,8 +110,10 @@ fn build_menu<R: Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>
 }
 
 pub fn run() {
-    register_commands(tauri::Builder::default())
-        .menu(build_menu)
+    let builder = register_commands(tauri::Builder::default());
+    #[cfg(not(windows))]
+    let builder = builder.menu(build_menu);
+    builder
         .on_menu_event(|app, event| match event.id().as_ref() {
             "new" | "new-alt" => {
                 let _ = app.emit("menu-new", ());

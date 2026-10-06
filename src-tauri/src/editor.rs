@@ -16,35 +16,73 @@ pub fn allow_asset<R: Runtime>(app: &AppHandle<R>, path: &Path) {
     let _ = app.asset_protocol_scope().allow_file(path);
 }
 
+/// ffmpeg lists a GPU encoder whether or not this PC has the GPU, so each one is
+/// tried on a tiny test clip; only those that really work are offered.
+async fn gpu_encoder_works(encoder: Encoder) -> bool {
+    jobs::capture(
+        &bins::ffmpeg(),
+        &[
+            "-hide_banner",
+            "-nostdin",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=256x256:r=10:d=0.5",
+            "-frames:v",
+            "3",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            encoder.ffmpeg_name(),
+            "-f",
+            "null",
+            "-",
+        ],
+    )
+    .await
+    .is_ok()
+}
+
 async fn encoder_support(state: &AppState) -> EncoderSupport {
     *state
         .encoders
         .get_or_init(|| async {
-            jobs::capture(&bins::ffmpeg(), &["-hide_banner", "-encoders"])
+            let mut support = jobs::capture(&bins::ffmpeg(), &["-hide_banner", "-encoders"])
                 .await
                 .map(|o| parse_encoders(&o))
-                .unwrap_or_default()
+                .unwrap_or_default();
+            let (nvenc, qsv, amf) = tokio::join!(
+                async { support.nvenc && gpu_encoder_works(Encoder::Nvenc).await },
+                async { support.qsv && gpu_encoder_works(Encoder::Qsv).await },
+                async { support.amf && gpu_encoder_works(Encoder::Amf).await },
+            );
+            support.nvenc = nvenc;
+            support.qsv = qsv;
+            support.amf = amf;
+            support
         })
         .await
 }
 
-/// Encoders to try, best first. VideoToolbox (the Mac's media engine) is
-/// preferred; libx264 is the software fallback.
+/// The encoder the user chose in Settings (`None` = Automatic).
+fn preferred_encoder(state: &AppState) -> Option<Encoder> {
+    Encoder::from_id(&state.settings().encoder)
+}
+
+/// Encoders to try, in order: the user's choice first (or the best available when
+/// it's Automatic), the CPU last as a safety net unless the CPU was chosen.
 ///
 /// `FILLERNCUT_ENCODER=videotoolbox` forces VideoToolbox to be tried first even
 /// when it isn't detected (used by the fallback test); it never removes the
 /// software fallback.
 pub async fn encoder_candidates(state: &AppState) -> Vec<Encoder> {
-    let support = encoder_support(state).await;
-    let forced_vt = std::env::var("FILLERNCUT_ENCODER").is_ok_and(|v| v == "videotoolbox");
-    let mut out = Vec::new();
-    if support.videotoolbox || forced_vt {
-        out.push(Encoder::VideoToolbox);
+    let mut support = encoder_support(state).await;
+    if std::env::var("FILLERNCUT_ENCODER").is_ok_and(|v| v == "videotoolbox") {
+        support.videotoolbox = true;
     }
-    if support.libx264 {
-        out.push(Encoder::Libx264);
-    }
-    out
+    Encoder::candidates(&support, preferred_encoder(state))
 }
 
 pub async fn pick_encoder(state: &AppState) -> Result<Encoder, String> {
@@ -56,26 +94,41 @@ pub async fn pick_encoder(state: &AppState) -> Result<Encoder, String> {
 }
 
 #[derive(Serialize)]
+pub struct EncoderOption {
+    pub id: &'static str,
+    pub label: &'static str,
+}
+
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
     pub version: String,
-    /// "videotoolbox", "libx264" or "none"
+    /// "windows", "macos" or "linux"
+    pub platform: &'static str,
+    /// The encoder exports will use first: an `Encoder::id()`, or "none".
     pub encoder: &'static str,
+    /// Encoders that work on this machine, for the Settings picker.
+    pub encoders: Vec<EncoderOption>,
     pub ffmpeg_found: bool,
 }
 
 #[tauri::command]
 pub async fn app_info<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> Result<AppInfo, String> {
     let support = encoder_support(&state).await;
-    let encoder = match Encoder::pick(&support) {
-        Some(Encoder::VideoToolbox) => "videotoolbox",
-        Some(Encoder::Libx264) => "libx264",
-        None => "none",
-    };
+    let first = encoder_candidates(&state).await.first().copied();
     Ok(AppInfo {
         version: app.package_info().version.to_string(),
-        encoder,
-        ffmpeg_found: encoder != "none",
+        platform: std::env::consts::OS,
+        encoder: first.map_or("none", Encoder::id),
+        encoders: Encoder::ALL
+            .into_iter()
+            .filter(|e| e.supported_by(&support))
+            .map(|e| EncoderOption {
+                id: e.id(),
+                label: e.label(),
+            })
+            .collect(),
+        ffmpeg_found: first.is_some(),
     })
 }
 
@@ -289,7 +342,7 @@ pub async fn export_video<R: Runtime>(
         let args = build_export_args(&spec, *encoder).map_err(|e| e.to_string())?;
         // After a hardware-encoder failure (unsupported size, busy media engine,
         // an Intel Mac...) retry on the CPU instead of giving up.
-        let note = (attempt > 0).then_some("Hardware encoder unavailable, exporting on the CPU…");
+        let note = (attempt > 0).then_some("That encoder didn't work, exporting on the CPU…");
         let res = jobs::run_ffmpeg(&guard.token, &args, total, |f| {
             jobs::emit_progress(&app, "export", Some(f), note)
         })
@@ -346,7 +399,16 @@ pub fn prune_preview_cache(cache_dir: &Path) {
 pub fn reveal_in_finder(path: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let status = std::process::Command::new("open").args(["-R", &path]).status();
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    let status = {
+        // `explorer /select,<path>` highlights the file. Explorer exits with 1 even on
+        // success, so only a failure to start it is an error.
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("explorer")
+            .raw_arg(format!("/select,\"{}\"", path.replace('/', "\\")))
+            .status()
+    };
+    #[cfg(not(any(target_os = "macos", windows)))]
     let status = std::process::Command::new("xdg-open")
         .arg(Path::new(&path).parent().unwrap_or(Path::new(".")))
         .status();
@@ -363,7 +425,16 @@ pub fn open_url(url: String) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     let status = std::process::Command::new("open").arg(&url).status();
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    let status = {
+        use std::os::windows::process::CommandExt;
+        // `start` is a cmd builtin; the empty "" is the window title it would otherwise eat.
+        std::process::Command::new("cmd")
+            .raw_arg(format!("/c start \"\" \"{url}\""))
+            .creation_flags(0x0800_0000)
+            .status()
+    };
+    #[cfg(not(any(target_os = "macos", windows)))]
     let status = std::process::Command::new("xdg-open").arg(&url).status();
     status.map(|_| ()).map_err(|e| e.to_string())
 }

@@ -1,4 +1,6 @@
 /** History of downloads and exports. */
+import { fileManager } from "../lib/platform";
+import { store } from "../store";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { api, errorMessage, type HistoryEntry } from "../api";
@@ -53,7 +55,7 @@ export function initHistoryDialog(openVideo: (path: string) => Promise<boolean>)
     if (e.exists) {
       actions.push(
         h("button", { class: "btn small primary", onclick: async () => { dialog.close(); await openVideo(e.path); } }, "Edit"),
-        h("button", { class: "btn small", onclick: () => void api.revealInFinder(e.path) }, "Show in Finder"),
+        h("button", { class: "btn small", onclick: () => void api.revealInFinder(e.path) }, `Show in ${fileManager(store.platform)}`),
       );
     } else actions.push(h("span", { class: "badge warn" }, "File moved or deleted"));
     if (e.sourceUrl)

@@ -1,3 +1,4 @@
+import { fileManager } from "../lib/platform";
 import { save } from "@tauri-apps/plugin-dialog";
 import { CANCELLED, api, errorMessage } from "../api";
 import { basename } from "../lib/format";
@@ -68,7 +69,7 @@ export function initExportBar(): void {
       toast(`Saved ${basename(saved)}`, {
         kind: "success",
         timeout: 12000,
-        action: { label: "Show in Finder", onClick: () => void api.revealInFinder(saved) },
+        action: { label: `Show in ${fileManager(store.platform)}`, onClick: () => void api.revealInFinder(saved) },
       });
     } catch (e) {
       const msg = errorMessage(e);

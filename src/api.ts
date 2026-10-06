@@ -72,11 +72,17 @@ export interface Settings {
   askExportLocation: boolean;
   exportQuality: number;
   exportImageQuality: number;
+  /** "auto" or an encoder id from `AppInfo.encoders`. */
+  encoder: string;
 }
 
 export interface AppInfo {
   version: string;
-  encoder: "videotoolbox" | "libx264" | "none";
+  platform: "macos" | "windows" | "linux";
+  /** The encoder exports use first: an encoder id, or "none". */
+  encoder: string;
+  /** Encoders that work on this machine. */
+  encoders: { id: string; label: string }[];
   ffmpegFound: boolean;
 }
 

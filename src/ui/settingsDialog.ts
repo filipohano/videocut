@@ -119,7 +119,7 @@ export function initSettingsDialog(): void {
       }
     });
 
-    const cookies = h("select", { "aria-label": "Browser login for downloads" }, ...BROWSERS.map((b) => h("option", { value: b.value }, b.label)));
+    const cookies = h("select", { "aria-label": "Browser login for downloads" }, ...BROWSERS.filter((b) => b.value !== "safari" || store.platform === "macos").map((b) => h("option", { value: b.value }, b.label)));
     cookies.value = s.cookiesBrowser ?? "";
     cookies.addEventListener("change", () => void save({ cookiesBrowser: (cookies.value || null) as CookieBrowser | null }));
 
@@ -148,6 +148,25 @@ export function initSettingsDialog(): void {
       );
     };
     const finishedRow = folderRow("Finished videos", "Exports land here. Files are named by date and time, e.g. 2026-10-01_15-42-07.mp4.", s.exportDir, api.exportDir, "exportDir");
+    const encoderSelect = h(
+      "select",
+      { "aria-label": "Video encoder" },
+      h("option", { value: "auto" }, "Automatic (fastest available)"),
+      ...store.encoders.map((e) => h("option", { value: e.id }, e.label)),
+    ) as HTMLSelectElement;
+    encoderSelect.value = store.encoders.some((e) => e.id === s.encoder) ? s.encoder : "auto";
+    encoderSelect.addEventListener("change", async () => {
+      await save({ encoder: encoderSelect.value });
+      // The encoder exports will actually start with, as the backend resolves it.
+      try {
+        const info = await api.appInfo();
+        store.encoder = info.encoder;
+        store.emit("settings");
+      } catch (e) {
+        toast(errorMessage(e), { kind: "error" });
+      }
+    });
+    const gpuFound = store.encoders.some((e) => e.id !== "libx264");
     const askRow = h(
       "label",
       { class: "check" },
@@ -201,10 +220,23 @@ export function initSettingsDialog(): void {
           h(
             "p",
             { class: "muted small", style: { margin: "0" } },
-            "Instagram (and some X posts) need you to be logged in. Pick the browser you're logged into; cookies are only read locally by the downloader and never leave your Mac. Safari needs Full Disk Access for FillernCut (System Settings → Privacy & Security).",
+            `Instagram (and some X posts) need you to be logged in. Pick the browser you're logged into; cookies are only read locally by the downloader and never leave your ${store.platform === "macos" ? "Mac" : "PC"}.${store.platform === "macos" ? " Safari needs Full Disk Access for FillernCut (System Settings → Privacy & Security)." : ""}`,
           ),
         ),
         h("section", { class: "set-section" }, h("h3", {}, "Folders"), finishedRow, askRow),
+        h(
+          "section",
+          { class: "set-section" },
+          h("h3", {}, "Video encoding"),
+          h("label", { class: "stack" }, "Encoder for exports", encoderSelect),
+          h(
+            "p",
+            { class: "muted small", style: { margin: "0" } },
+            gpuFound
+              ? "Automatic uses your graphics chip when it works, and the CPU otherwise. A GPU is much faster; the CPU is slower but compresses a little better. If the chosen encoder fails, the export is retried on the CPU."
+              : "No GPU encoder was found on this computer, so exports use the CPU.",
+          ),
+        ),
         h(
           "section",
           { class: "set-section" },

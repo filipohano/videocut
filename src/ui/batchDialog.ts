@@ -1,4 +1,5 @@
 /** Batch: apply the open video's crop, watermarks and quality to more videos. */
+import { fileManager } from "../lib/platform";
 import { open } from "@tauri-apps/plugin-dialog";
 import { CANCELLED, api, errorMessage } from "../api";
 import { DEFAULT_BATCH_OPTIONS, buildBatchSpec, type BatchOptions } from "../lib/batch";
@@ -134,7 +135,7 @@ export function initBatchDialog(): void {
         { class: "dialog-foot" },
         h("span", { class: "grow" }, running ? "Working… this can take a while for long videos." : finished ? `${done} exported${failed ? `, ${failed} failed` : ""}.` : queued ? `${queued} video${queued === 1 ? "" : "s"} ready` : ""),
         !running && h("button", { class: "btn small", onclick: async () => { const picked = await open({ multiple: true, filters: [{ name: "Videos and photos", extensions: [...VIDEO_EXTENSIONS, ...PHOTO_EXTENSIONS] }] }); if (Array.isArray(picked)) addToBatch(picked); else if (typeof picked === "string") addToBatch([picked]); } }, "Add files…"),
-        finished && done > 0 && h("button", { class: "btn small", onclick: () => { const last = [...items].reverse().find((i) => i.output); if (last?.output) void api.revealInFinder(last.output); } }, "Show in Finder"),
+        finished && done > 0 && h("button", { class: "btn small", onclick: () => { const last = [...items].reverse().find((i) => i.output); if (last?.output) void api.revealInFinder(last.output); } }, `Show in ${fileManager(store.platform)}`),
         running
           ? h("button", { class: "btn small danger", onclick: () => { cancelled = true; void api.cancelJob("export"); } }, "Stop")
           : h("button", { class: "btn small primary", disabled: queued === 0, onclick: () => void run() }, queued ? `Export ${queued}` : "Export"),

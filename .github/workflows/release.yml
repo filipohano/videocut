@@ -57,11 +57,55 @@ jobs:
           releaseName: FillernCut ${{ github.ref_name }}
           releaseBody: |
             ## Install
-            Download **FillernCut_*_aarch64.dmg**, drag the app to Applications.
+            **Mac (Apple silicon):** download **FillernCut_*_aarch64.dmg**, drag the app to Applications.
             The app isn't notarized, so the first time: right-click → **Open**
             (or run `xattr -dr com.apple.quarantine /Applications/FillernCut.app`).
+
+            **Windows 10/11 (64-bit):** download **FillernCut_*_x64-setup.exe** and run it.
+            The installer isn't code-signed, so Windows SmartScreen may say "Windows protected your PC":
+            click **More info → Run anyway**.
 
             Installed copies update themselves — see Settings → Updates.
           releaseDraft: false
           prerelease: false
-          args: --target aarch64-apple-darwin
+          args: --target aarch64-apple-darwin --bundles app,dmg
+
+  windows:
+    name: Build and publish (Windows, x64)
+    runs-on: windows-latest
+    # Runs after the Mac job so the two don't overwrite each other's entries in latest.json.
+    needs: macos
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version files match the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/version.mjs --check "${{ github.ref_name }}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+      - name: Fetch ffmpeg and ffprobe (checksum-verified)
+        run: bash scripts/fetch-binaries-windows.sh
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: FillernCut ${{ github.ref_name }}
+          releaseDraft: false
+          prerelease: false
+          args: --target x86_64-pc-windows-msvc --bundles nsis

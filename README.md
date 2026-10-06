@@ -1,6 +1,6 @@
 # FillernCut
 
-Download, crop, trim and watermark videos on your Mac — everything runs locally, powered by ffmpeg.
+Download, crop, trim and watermark videos on your Mac or Windows PC — everything runs locally, powered by ffmpeg.
 
 - **Downloader** for **TikTok**, **Instagram** and **X/Twitter** links. TikTok comes in source quality
   *without* the watermark (full links, `vt.tiktok.com` share links, or just the 19-digit post id), and TikTok
@@ -27,12 +27,13 @@ Download, crop, trim and watermark videos on your Mac — everything runs locall
 - **History** of every download and export, with preview images, "Show in Finder", "Edit again" and "Copy link".
   Removing an entry never deletes the video.
 - **Preview volume** slider in the player bar (only affects what you hear in the app, never the export).
-- **Fast export**: H.264 on the Apple-silicon media engine (VideoToolbox) with a quality slider, and an
-  automatic CPU fallback if the hardware encoder ever refuses a file.
+- **Fast export**: H.264 with a quality slider. You choose the encoder in Settings → Video encoding: Automatic
+  (the best working one), the graphics chip (Apple VideoToolbox, NVIDIA NVENC, Intel Quick Sync or AMD AMF), or
+  the CPU. If a chosen GPU encoder refuses a file, the export is retried on the CPU.
 - **Updates from GitHub**: checks on every launch, shows an *out of date* banner, and can install new versions
   by itself (Settings → Updates).
 
-Requires an Apple-silicon Mac (M1 or newer), macOS 12+.
+Requires an Apple-silicon Mac (M1 or newer) with macOS 12+, or a 64-bit PC with Windows 10/11.
 
 ## Install
 
@@ -41,6 +42,10 @@ Requires an Apple-silicon Mac (M1 or newer), macOS 12+.
 2. The app isn't notarized by Apple, so the first launch needs **right-click → Open** (or
    `xattr -dr com.apple.quarantine /Applications/FillernCut.app`). Updates installed by the app itself don't
    show this prompt again.
+
+**Windows:** download `FillernCut_<version>_x64-setup.exe` from the same page and run it (no admin rights needed).
+The installer isn't code-signed, so SmartScreen may say "Windows protected your PC": click **More info → Run
+anyway**. Shortcuts use **Ctrl** instead of ⌘ (Ctrl+N / Ctrl+R new, Ctrl+O open, Ctrl+Z undo).
 
 ## Updates
 
@@ -70,12 +75,14 @@ refreshed in the background at launch (toggle in Settings → Downloads), becaus
 
 ## Development
 
-Prerequisites: an Apple-silicon Mac with Xcode command-line tools, [Node 22](https://nodejs.org) and
+Prerequisites: an Apple-silicon Mac with Xcode command-line tools (or a Windows PC with the
+[Visual Studio C++ build tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and Git Bash), [Node 22](https://nodejs.org) and
 [Rust](https://rustup.rs).
 
 ```bash
 npm install
 npm run setup          # downloads ffmpeg and ffprobe (checksum-verified) into src-tauri/binaries/
+                       # (on Windows: npm run setup:windows, in Git Bash)
 npm run tauri dev      # runs the real app with hot reload
 ```
 
@@ -131,8 +138,8 @@ cargo update -w                    # refresh Cargo.lock
 git commit -am "Release v0.2.0" && git tag v0.2.0 && git push && git push --tags
 ```
 
-The **Release** workflow builds the signed app on a macOS runner, publishes the `.dmg`, and uploads
-`latest.json` — the file installed apps check at launch.
+The **Release** workflow builds the signed app on a macOS runner (`.dmg`) and then a Windows runner
+(`-setup.exe`), publishes both, and uploads `latest.json` — the file installed apps check at launch.
 
 ## Licensing
 

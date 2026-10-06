@@ -57,6 +57,8 @@ pub struct Settings {
     pub export_quality: u8,
     /// JPEG quality for photo exports (1..=100).
     pub export_image_quality: u8,
+    /// Which H.264 encoder to use: "auto" (best available) or an `Encoder::id()`.
+    pub encoder: String,
 }
 
 impl Default for Settings {
@@ -69,6 +71,7 @@ impl Default for Settings {
             ask_export_location: false,
             export_quality: 60,
             export_image_quality: 90,
+            encoder: "auto".into(),
         }
     }
 }
@@ -87,6 +90,9 @@ impl Settings {
     pub fn sanitized(mut self) -> Settings {
         self.export_quality = self.export_quality.clamp(1, 100);
         self.export_image_quality = self.export_image_quality.clamp(1, 100);
+        if crate::export::Encoder::from_id(&self.encoder).is_none() {
+            self.encoder = "auto".into();
+        }
         self
     }
 
@@ -150,6 +156,17 @@ mod tests {
         assert_eq!(s.update_mode, UpdateMode::Manual);
         assert_eq!(s.export_quality, 60);
         assert!(s.auto_update_ytdlp);
+    }
+
+    #[test]
+    fn encoder_defaults_to_auto_and_unknown_values_reset() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        assert_eq!(Settings::default().encoder, "auto");
+        fs::write(&path, r#"{"encoder":"nvenc"}"#).unwrap();
+        assert_eq!(Settings::load(&path).encoder, "nvenc");
+        fs::write(&path, r#"{"encoder":"warp-drive"}"#).unwrap();
+        assert_eq!(Settings::load(&path).encoder, "auto");
     }
 
     #[test]

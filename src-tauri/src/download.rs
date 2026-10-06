@@ -133,6 +133,7 @@ async fn download_with_ytdlp<R: Runtime>(
     let program = crate::settings::ensure_ytdlp(&state.data_dir).await?;
 
     let mut cmd = Command::new(&program);
+    bins::hide_window(&mut cmd);
     cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

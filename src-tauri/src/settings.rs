@@ -26,6 +26,15 @@ pub fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<S
     Ok(settings)
 }
 
+/// The standalone yt-dlp build for this OS (a single file, no Python needed).
+const YTDLP_ASSET: &str = if cfg!(windows) {
+    "yt-dlp.exe"
+} else if cfg!(target_os = "macos") {
+    "yt-dlp_macos"
+} else {
+    "yt-dlp_linux"
+};
+
 const YTDLP_RELEASE: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download";
 
 static YTDLP_HEALTHY: AtomicBool = AtomicBool::new(false);
@@ -73,9 +82,9 @@ async fn install_ytdlp(data_dir: &Path) -> Result<PathBuf, String> {
         .text()
         .await
         .map_err(|_| offline.to_string())?;
-    let expected =
-        checksum_for(&sums, "yt-dlp_macos").ok_or("yt-dlp's checksum list is missing yt-dlp_macos")?;
-    let bytes = get("yt-dlp_macos")
+    let expected = checksum_for(&sums, YTDLP_ASSET)
+        .ok_or_else(|| format!("yt-dlp's checksum list is missing {YTDLP_ASSET}"))?;
+    let bytes = get(YTDLP_ASSET)
         .await
         .and_then(|r| r.error_for_status())
         .map_err(|_| offline.to_string())?

@@ -419,10 +419,16 @@ fn downloads_are_temporary_and_only_discarded_from_the_download_folder() {
 
     // A video from the user's own disk is never deleted...
     let own = make_video(h.dir.path(), "mine.mp4", "64x64", 1);
-    assert_eq!(call(&h.win, "discard_download", json!({ "path": own })).unwrap(), json!(false));
+    assert_eq!(
+        call(&h.win, "discard_download", json!({ "path": own })).unwrap(),
+        json!(false)
+    );
     assert!(Path::new(&own).is_file());
     // ...but the temporary download is.
-    assert_eq!(call(&h.win, "discard_download", json!({ "path": path })).unwrap(), json!(true));
+    assert_eq!(
+        call(&h.win, "discard_download", json!({ "path": path })).unwrap(),
+        json!(true)
+    );
     assert!(!Path::new(&path).exists());
 
     // Exports still go to their own, permanent folder.

@@ -17,7 +17,7 @@ export const DEFAULT_TEXT_STYLE: TextStyle = {
   align: "center",
 };
 
-/** Common macOS fonts. The font field also accepts any other installed font name. */
+/** Common macOS and Windows fonts (a font the PC lacks falls back to Arial). The font field also accepts any other installed font name. */
 export const FONT_CHOICES = [
   "Helvetica Neue",
   "Helvetica",
@@ -44,6 +44,14 @@ export const FONT_CHOICES = [
   "Papyrus",
   "Copperplate",
   "SF Pro Display",
+  "Segoe UI",
+  "Bahnschrift",
+  "Calibri",
+  "Cambria",
+  "Tahoma",
+  "Consolas",
+  "Comic Sans MS",
+  "Segoe Script",
 ];
 
 export const MAX_LINES = 6;

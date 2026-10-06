@@ -4,6 +4,7 @@ import { ask, open } from "@tauri-apps/plugin-dialog";
 import { api, errorMessage } from "./api";
 import { evenRect, fullRect } from "./lib/crop";
 import { basename } from "./lib/format";
+import type { Platform } from "./lib/platform";
 import { PHOTO_EXTENSIONS, VIDEO_EXTENSIONS, extensionOf } from "./lib/links";
 import { withProgress } from "./progress";
 import { store } from "./store";
@@ -13,8 +14,13 @@ import { showOverlay } from "./ui/overlay";
 import type { Stage } from "./ui/stage";
 import { toast } from "./ui/toast";
 
-/** Video codecs the macOS webview plays reliably (including seeking). */
-const NATIVE_CODECS = new Set(["h264", "hevc", "prores", "mpeg4"]);
+/** Video codecs the system webview plays reliably (including seeking). */
+const NATIVE_CODECS: Record<Platform, Set<string>> = {
+  macos: new Set(["h264", "hevc", "prores", "mpeg4"]),
+  // WebView2 (Chromium) plays these out of the box; HEVC/AV1 need extra Windows add-ons.
+  windows: new Set(["h264", "vp8", "vp9"]),
+  linux: new Set(["h264", "vp8", "vp9"]),
+};
 
 let stage: Stage;
 
@@ -93,7 +99,7 @@ export async function openVideo(path: string): Promise<boolean> {
       try {
         // WebKit is solid with these; anything else (VP9, AV1, VP8…) can stutter or
         // misbehave when scrubbing, so those get a small H.264 preview straight away.
-        if (!NATIVE_CODECS.has(info.videoCodec ?? "")) throw new Error("preview copy needed");
+        if (!NATIVE_CODECS[store.platform].has(info.videoCodec ?? "")) throw new Error("preview copy needed");
         await stage.load(playUrl);
       } catch {
         // WKWebView can't play every container/codec: make a small H.264 proxy

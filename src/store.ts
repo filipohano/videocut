@@ -1,6 +1,7 @@
 /** Application state with a minimal topic-based change notification. */
 import type { MediaInfo, Settings, WatermarkEntry } from "./api";
 import type { Rect } from "./lib/crop";
+import type { Platform } from "./lib/platform";
 
 export interface ActiveWatermark extends WatermarkEntry {
   /** `asset:` URL for <img>. */
@@ -49,7 +50,11 @@ class Store {
   library: WatermarkEntry[] = [];
   selectedWatermark: string | null = null;
   appVersion = "";
-  encoder: "videotoolbox" | "libx264" | "none" = "videotoolbox";
+  platform: Platform = "macos";
+  /** The encoder exports use first: an encoder id, or "none". */
+  encoder = "libx264";
+  /** Encoders that work on this machine. */
+  encoders: { id: string; label: string }[] = [];
   update: UpdateInfo | null = null;
   /** True while a download / export / preview is running. */
   busy = false;

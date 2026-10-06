@@ -25,7 +25,13 @@ fn env() -> Option<Env> {
         .output()
         .ok()?;
     let support = parse_encoders(&String::from_utf8_lossy(&enc.stdout));
-    let encoder = Encoder::pick(&support)?;
+    // The CPU encoder works on every machine; a GPU encoder that ffmpeg merely lists may
+    // have no GPU behind it here.
+    let encoder = if support.libx264 {
+        Encoder::Libx264
+    } else {
+        Encoder::pick(&support)?
+    };
     Some(Env {
         dir: tempfile::tempdir().unwrap(),
         ffmpeg,

@@ -1,7 +1,7 @@
 {
   "name": "fillerncut",
   "private": true,
-  "version": "0.4.3",
+  "version": "0.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,6 +11,7 @@
     "test": "vitest run",
     "tauri": "tauri",
     "setup": "bash scripts/fetch-binaries.sh",
+    "setup:windows": "bash scripts/fetch-binaries-windows.sh",
     "dev:assets": "bash scripts/make-dev-assets.sh",
     "version": "node scripts/version.mjs"
   },

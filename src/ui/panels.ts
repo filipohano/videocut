@@ -3,6 +3,7 @@ import { api } from "../api";
 import { ASPECT_OPTIONS, clampRect, evenRect, fitRatio, fullRect, ratioValue, type Rect } from "../lib/crop";
 import { clamp, formatBytes, formatSeconds, parseDecimal, parseSeconds } from "../lib/format";
 import { buildExportSpec } from "../lib/spec";
+import { encoderSummary } from "../lib/platform";
 import { store } from "../store";
 import { reclampAll } from "../watermarkOps";
 import { $, debounce, h } from "./dom";
@@ -160,24 +161,16 @@ export function initOutputPanel(): void {
       return;
     }
     quality.disabled = false;
-    codec.replaceChildren(
-      h(
-        "option",
-        { value: "h264" },
-        store.encoder === "videotoolbox"
-          ? "H.264 on Apple silicon (VideoToolbox — fastest)"
-          : store.encoder === "libx264"
-            ? "H.264 on the CPU (libx264)"
-            : "No H.264 encoder found",
-      ),
-    );
+    const enc = store.encoders.find((e) => e.id === store.encoder);
+    codec.replaceChildren(h("option", { value: "h264" }, encoderSummary(store.encoder, enc?.label)));
     codec.disabled = true;
+    const sizeNote = "The file size follows the original video: 50 keeps about the same size, every 25 steps up doubles it (and the quality headroom), every 25 down halves it. The default is a good fit for social media.";
     help.textContent =
-      store.encoder === "videotoolbox"
-        ? "Encoded by your Mac's media engine: fast and light on battery. The file size follows the original video: 50 keeps about the same size, every 25 steps up doubles it (and the quality headroom), every 25 down halves it. The default is a good fit for social media."
+      store.encoder === "none"
+        ? "ffmpeg wasn't found, so exporting is unavailable. Reinstall FillernCut."
         : store.encoder === "libx264"
-          ? "VideoToolbox isn't available on this machine, so the CPU encoder is used. 50 keeps about the same size as the original."
-          : "ffmpeg wasn't found, so exporting is unavailable. Reinstall FillernCut.";
+          ? `Encoded on the CPU: the slowest option, but it works everywhere and compresses best. You can pick a GPU encoder in Settings. ${sizeNote}`
+          : `Encoded by the graphics chip: fast and light on the CPU. You can switch to the CPU in Settings. ${sizeNote}`;
   }
 
   codec.addEventListener("change", () => {
@@ -242,6 +235,6 @@ export function initOutputPanel(): void {
   store.on(["video", "quality"], () => {
     if (store.video) renderCodec();
   });
-  store.on("video", renderCodec);
+  store.on(["video", "settings"], renderCodec);
   renderCodec();
 }

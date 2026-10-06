@@ -138,52 +138,154 @@ pub struct ExportSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Encoder {
-    /// Apple's hardware H.264 encoder (the default on every Apple-silicon Mac).
+    /// Apple's hardware H.264 encoder (every Apple-silicon Mac).
     VideoToolbox,
-    /// Software fallback, used when VideoToolbox isn't available.
+    /// NVIDIA GPUs.
+    Nvenc,
+    /// Intel GPUs (Quick Sync).
+    Qsv,
+    /// AMD GPUs.
+    Amf,
+    /// Software encoder: works everywhere, slowest, most compatible.
     Libx264,
 }
 
 impl Encoder {
+    /// Best first: the order "Automatic" tries them in.
+    pub const ALL: [Encoder; 5] = [
+        Encoder::VideoToolbox,
+        Encoder::Nvenc,
+        Encoder::Qsv,
+        Encoder::Amf,
+        Encoder::Libx264,
+    ];
+
+    /// Stable name used in settings and by the UI.
+    pub fn id(self) -> &'static str {
+        match self {
+            Encoder::VideoToolbox => "videotoolbox",
+            Encoder::Nvenc => "nvenc",
+            Encoder::Qsv => "qsv",
+            Encoder::Amf => "amf",
+            Encoder::Libx264 => "libx264",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Encoder> {
+        Encoder::ALL.into_iter().find(|e| e.id() == id)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Encoder::VideoToolbox => "Apple VideoToolbox (GPU)",
+            Encoder::Nvenc => "NVIDIA NVENC (GPU)",
+            Encoder::Qsv => "Intel Quick Sync (GPU)",
+            Encoder::Amf => "AMD AMF (GPU)",
+            Encoder::Libx264 => "CPU (libx264)",
+        }
+    }
+
+    pub fn is_hardware(self) -> bool {
+        self != Encoder::Libx264
+    }
+
+    /// ffmpeg's name for the encoder.
+    pub fn ffmpeg_name(self) -> &'static str {
+        match self {
+            Encoder::VideoToolbox => "h264_videotoolbox",
+            Encoder::Nvenc => "h264_nvenc",
+            Encoder::Qsv => "h264_qsv",
+            Encoder::Amf => "h264_amf",
+            Encoder::Libx264 => "libx264",
+        }
+    }
+
+    pub fn supported_by(self, support: &crate::media::EncoderSupport) -> bool {
+        match self {
+            Encoder::VideoToolbox => support.videotoolbox,
+            Encoder::Nvenc => support.nvenc,
+            Encoder::Qsv => support.qsv,
+            Encoder::Amf => support.amf,
+            Encoder::Libx264 => support.libx264,
+        }
+    }
+
+    /// The best encoder available.
     pub fn pick(support: &crate::media::EncoderSupport) -> Option<Encoder> {
-        if support.videotoolbox {
-            Some(Encoder::VideoToolbox)
-        } else if support.libx264 {
-            Some(Encoder::Libx264)
-        } else {
-            None
+        Encoder::ALL.into_iter().find(|e| e.supported_by(support))
+    }
+
+    /// Encoders to try, in order. `preferred` is the user's choice (`None` = Automatic).
+    /// A chosen GPU still falls back to the CPU if it fails; a chosen CPU never uses a GPU.
+    pub fn candidates(support: &crate::media::EncoderSupport, preferred: Option<Encoder>) -> Vec<Encoder> {
+        match preferred {
+            Some(Encoder::Libx264) => {
+                if support.libx264 {
+                    vec![Encoder::Libx264]
+                } else {
+                    Vec::new()
+                }
+            }
+            Some(first) if first.supported_by(support) => {
+                let mut out = vec![first];
+                if support.libx264 {
+                    out.push(Encoder::Libx264);
+                }
+                out
+            }
+            // Automatic, or a choice this machine can't do.
+            _ => Encoder::ALL
+                .into_iter()
+                .filter(|e| e.supported_by(support))
+                .collect(),
         }
     }
 
     fn video_args(self, bitrate: u64) -> Vec<String> {
         let br = bitrate.clamp(MIN_BITRATE, MAX_BITRATE);
+        let (b, max) = (br.to_string(), (br * 2).to_string());
+        let common = ["-profile:v", "high", "-tag:v", "avc1"];
         match self {
-            Encoder::VideoToolbox => s(&[
+            Encoder::VideoToolbox => s(&["-c:v", "h264_videotoolbox", "-b:v", &b])
+                .into_iter()
+                .chain(s(&common))
+                .collect(),
+            Encoder::Nvenc => s(&[
                 "-c:v",
-                "h264_videotoolbox",
-                "-b:v",
-                &br.to_string(),
-                "-profile:v",
-                "high",
-                "-tag:v",
-                "avc1",
-            ]),
-            Encoder::Libx264 => s(&[
-                "-c:v",
-                "libx264",
+                "h264_nvenc",
                 "-preset",
-                "medium",
+                "p5",
+                "-rc",
+                "vbr",
                 "-b:v",
-                &br.to_string(),
+                &b,
                 "-maxrate",
-                &(br * 2).to_string(),
+                &max,
                 "-bufsize",
-                &(br * 2).to_string(),
-                "-profile:v",
-                "high",
-                "-tag:v",
-                "avc1",
-            ]),
+                &max,
+            ])
+            .into_iter()
+            .chain(s(&common))
+            .collect(),
+            Encoder::Qsv => s(&[
+                "-c:v", "h264_qsv", "-preset", "medium", "-b:v", &b, "-maxrate", &max, "-bufsize", &max,
+            ])
+            .into_iter()
+            .chain(s(&common))
+            .collect(),
+            Encoder::Amf => s(&[
+                "-c:v", "h264_amf", "-quality", "balanced", "-rc", "vbr_peak", "-b:v", &b, "-maxrate", &max,
+                "-bufsize", &max,
+            ])
+            .into_iter()
+            .chain(s(&common))
+            .collect(),
+            Encoder::Libx264 => s(&[
+                "-c:v", "libx264", "-preset", "medium", "-b:v", &b, "-maxrate", &max, "-bufsize", &max,
+            ])
+            .into_iter()
+            .chain(s(&common))
+            .collect(),
         }
     }
 }
@@ -984,18 +1086,88 @@ mod tests {
         assert_eq!(
             Encoder::pick(&EncoderSupport {
                 videotoolbox: true,
-                libx264: true
+                libx264: true,
+                ..Default::default()
             }),
             Some(Encoder::VideoToolbox)
         );
         assert_eq!(
             Encoder::pick(&EncoderSupport {
-                videotoolbox: false,
-                libx264: true
+                libx264: true,
+                ..Default::default()
             }),
             Some(Encoder::Libx264)
         );
         assert_eq!(Encoder::pick(&EncoderSupport::default()), None);
+    }
+
+    fn windows_pc() -> crate::media::EncoderSupport {
+        crate::media::EncoderSupport {
+            nvenc: true,
+            amf: true,
+            libx264: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn automatic_tries_every_available_encoder_best_first_ending_on_the_cpu() {
+        assert_eq!(
+            Encoder::candidates(&windows_pc(), None),
+            vec![Encoder::Nvenc, Encoder::Amf, Encoder::Libx264]
+        );
+    }
+
+    #[test]
+    fn a_chosen_gpu_goes_first_and_falls_back_to_the_cpu() {
+        assert_eq!(
+            Encoder::candidates(&windows_pc(), Some(Encoder::Amf)),
+            vec![Encoder::Amf, Encoder::Libx264]
+        );
+    }
+
+    #[test]
+    fn a_chosen_cpu_never_uses_a_gpu() {
+        assert_eq!(
+            Encoder::candidates(&windows_pc(), Some(Encoder::Libx264)),
+            vec![Encoder::Libx264]
+        );
+    }
+
+    #[test]
+    fn a_choice_this_machine_cannot_do_means_automatic() {
+        assert_eq!(
+            Encoder::candidates(&windows_pc(), Some(Encoder::VideoToolbox)),
+            Encoder::candidates(&windows_pc(), None)
+        );
+        assert!(Encoder::candidates(&crate::media::EncoderSupport::default(), None).is_empty());
+    }
+
+    #[test]
+    fn encoder_ids_round_trip() {
+        for e in Encoder::ALL {
+            assert_eq!(Encoder::from_id(e.id()), Some(e));
+        }
+        assert_eq!(Encoder::from_id("auto"), None);
+        assert_eq!(Encoder::from_id("nonsense"), None);
+    }
+
+    #[test]
+    fn every_encoder_gets_its_own_codec_and_the_target_bitrate() {
+        let sp = spec();
+        for e in Encoder::ALL {
+            let a = build_export_args(&sp, e).unwrap();
+            assert_eq!(arg_after(&a, "-c:v"), e.ffmpeg_name());
+            assert_eq!(arg_after(&a, "-profile:v"), "high");
+            assert_eq!(
+                arg_after(&a, "-b:v"),
+                target_bitrate(&sp).clamp(MIN_BITRATE, MAX_BITRATE).to_string()
+            );
+        }
+        let nv = build_export_args(&sp, Encoder::Nvenc).unwrap();
+        assert_eq!(arg_after(&nv, "-rc"), "vbr");
+        let amf = build_export_args(&sp, Encoder::Amf).unwrap();
+        assert_eq!(arg_after(&amf, "-rc"), "vbr_peak");
     }
 
     #[test]

@@ -26,6 +26,12 @@ pub struct MediaInfo {
 #[serde(rename_all = "camelCase")]
 pub struct EncoderSupport {
     pub videotoolbox: bool,
+    /// NVIDIA GPUs.
+    pub nvenc: bool,
+    /// Intel GPUs (Quick Sync).
+    pub qsv: bool,
+    /// AMD GPUs.
+    pub amf: bool,
     pub libx264: bool,
 }
 
@@ -56,6 +62,9 @@ pub fn parse_encoders(ffmpeg_encoders_output: &str) -> EncoderSupport {
         }
         match name {
             "h264_videotoolbox" => s.videotoolbox = true,
+            "h264_nvenc" => s.nvenc = true,
+            "h264_qsv" => s.qsv = true,
+            "h264_amf" => s.amf = true,
             "libx264" => s.libx264 = true,
             _ => {}
         }
@@ -268,12 +277,18 @@ mod tests {
     #[test]
     fn encoder_detection() {
         let out = " V....D h264_videotoolbox   VideoToolbox H.264 Encoder (codec h264)\n \
+                   V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)\n \
+                   V....D h264_qsv             H.264 / AVC (Intel Quick Sync Video acceleration)\n \
+                   V....D h264_amf             AMD AMF H.264 Encoder (codec h264)\n \
                    V....D libx264              libx264 H.264 / AVC\n \
                    A....D aac                  AAC\n";
         assert_eq!(
             parse_encoders(out),
             EncoderSupport {
                 videotoolbox: true,
+                nvenc: true,
+                qsv: true,
+                amf: true,
                 libx264: true
             }
         );
