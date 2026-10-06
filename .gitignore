@@ -16,3 +16,6 @@ src-tauri/target/
 
 # Generated sample media for the browser dev mock
 public/dev/
+
+# Test runs without a HOME write exports here
+src-tauri/FillernCut/
