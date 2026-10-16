@@ -1,6 +1,6 @@
 //! Shared application state.
 
-use fillerncut_core::{EncoderSupport, HistoryStore, LibraryStore, Settings};
+use fillerncut_core::{EncoderSupport, HistoryStore, LibraryStore, QueueStore, Settings};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -14,6 +14,7 @@ pub struct AppState {
     pub settings: Mutex<Settings>,
     pub library: LibraryStore,
     pub history: HistoryStore,
+    pub queue: QueueStore,
     pub encoders: OnceCell<EncoderSupport>,
     jobs: Mutex<HashMap<String, CancellationToken>>,
 }
@@ -25,6 +26,7 @@ impl AppState {
             settings: Mutex::new(Settings::load(&settings_path)),
             library: LibraryStore::new(data_dir.join("watermarks")),
             history: HistoryStore::new(data_dir.join("history")),
+            queue: QueueStore::new(data_dir.join("queue.json")),
             settings_path,
             data_dir,
             cache_dir,

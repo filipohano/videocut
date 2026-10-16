@@ -6,6 +6,9 @@
  * Sample media comes from `npm run dev:assets` (needs ffmpeg).
  * Query flags:  ?update=1  pretend a newer release exists
  *               ?mode=notify|manual  start with that update mode
+ *               ?queue=off|items|empty  Telegram queue: no server, connected with
+ *                 links, connected and empty (default: configured, not connected;
+ *                 connecting "succeeds" a few seconds after the code is shown)
  */
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
@@ -35,6 +38,7 @@ let settings: Settings = {
   exportQuality: 60,
   exportImageQuality: 90,
   encoder: "auto",
+  queueServer: null,
 };
 
 const entry = (id: string, name: string, file: string, aspect: number, nx: number, ny: number, scale: number, opacity: number, content = { l: 0, t: 0, r: 1, b: 1 }): WatermarkEntry => ({
@@ -52,6 +56,24 @@ let history = [
   { id: "h2", kind: "download", path: "/dev/sample.webm", createdAt: Math.floor(Date.now() / 1000) - 3600, title: "Funny cat", sourceUrl: "https://www.tiktok.com/@a/video/1234567890123456789", platform: "tiktok", bytes: 3_100_000, duration: null, exists: true, thumbPath: "/dev/logo-b.png" },
   { id: "h3", kind: "download", path: "/dev/gone.mp4", createdAt: Math.floor(Date.now() / 1000) - 90000, title: null, sourceUrl: "https://x.com/jack/status/20", platform: "twitter", bytes: 800_000, duration: null, exists: false, thumbPath: null },
 ];
+
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+const queueMode = params.get("queue") ?? "fresh";
+const sampleItems = [
+  { id: 1, url: "https://www.instagram.com/reel/C1a2B3c4D5e", platform: "instagram", addedAt: nowSeconds() - 120 },
+  { id: 2, url: "https://www.tiktok.com/@someone/video/7123456789012345678", platform: "tiktok", addedAt: nowSeconds() - 3 * 3600 },
+  { id: 3, url: "https://x.com/jack/status/20", platform: "twitter", addedAt: nowSeconds() - 30 * 3600 },
+];
+const connectedAtStart = queueMode === "items" || queueMode === "empty";
+let queue = {
+  configured: queueMode !== "off",
+  connected: connectedAtStart,
+  bot: connectedAtStart ? "FillernBot" : null,
+  linked: connectedAtStart ? [{ label: "Filip", linkedAt: nowSeconds() - 86400 }] : [],
+  items: queueMode === "items" ? sampleItems : [],
+  lastRefreshed: null as number | null,
+};
+let pairedAt = 0;
 
 const cancelled = new Set<string>();
 
@@ -141,7 +163,25 @@ mockIPC(
         return a.spec.output;
       case "download_link":
         await simulate("download", "Downloading…", 2400);
-        return { path: "/dev/sample.webm", platform: "tiktok", title: null };
+        return { path: "/dev/sample.webm", platform: "tiktok", title: null, note: null };
+      case "queue_get":
+        return queue;
+      case "queue_refresh":
+        // Pretend the user pressed Start in Telegram a few seconds after the code appeared.
+        if (pairedAt && queue.linked.length === 0 && Date.now() - pairedAt > 4000) queue = { ...queue, linked: [{ label: "Filip", linkedAt: nowSeconds() }] };
+        if (queue.connected) queue = { ...queue, lastRefreshed: nowSeconds() };
+        return { view: queue, added: 0 };
+      case "queue_pair":
+        pairedAt = Date.now();
+        queue = { ...queue, connected: true, bot: "FillernBot" };
+        return { code: "K7Q9XM2P", link: "https://t.me/FillernBot?start=K7Q9XM2P", bot: "FillernBot", expiresAt: nowSeconds() + 600 };
+      case "queue_remove":
+        queue = { ...queue, items: queue.items.filter((i) => i.id !== a.id) };
+        return queue;
+      case "queue_disconnect":
+        queue = { ...queue, connected: false, bot: null, linked: [], items: [], lastRefreshed: null };
+        pairedAt = 0;
+        return queue;
       case "history_list":
         return history;
       case "history_remove":

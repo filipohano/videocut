@@ -5,6 +5,7 @@ mod editor;
 mod history;
 mod jobs;
 mod library;
+mod queue;
 mod settings;
 mod state;
 
@@ -38,6 +39,11 @@ pub fn register_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         library::library_add,
         library::library_update,
         library::library_remove,
+        queue::queue_get,
+        queue::queue_refresh,
+        queue::queue_pair,
+        queue::queue_remove,
+        queue::queue_disconnect,
         settings::get_settings,
         settings::save_settings,
         settings::ytdlp_version,

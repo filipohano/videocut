@@ -415,12 +415,13 @@ pub fn reveal_in_finder(path: String) -> Result<(), String> {
     status.map(|_| ()).map_err(|e| e.to_string())
 }
 
-/// Open a link in the default browser. Only this project's GitHub pages are
-/// allowed, since the only links in the UI are release notes and the repo.
+/// Open a link in the default browser. Only this project's GitHub pages and the
+/// Telegram bot link of the queue are allowed, since those are the only links in the UI.
 #[tauri::command]
 pub fn open_url(url: String) -> Result<(), String> {
     const ALLOWED: &str = "https://github.com/filipohano/videocut";
-    if url != ALLOWED && !url.starts_with(&format!("{ALLOWED}/")) {
+    let github = url == ALLOWED || url.starts_with(&format!("{ALLOWED}/"));
+    if !github && !fillerncut_core::queue::is_telegram_link(&url) {
         return Err("That link isn't allowed".into());
     }
     #[cfg(target_os = "macos")]

@@ -74,6 +74,8 @@ export interface Settings {
   exportImageQuality: number;
   /** "auto" or an encoder id from `AppInfo.encoders`. */
   encoder: string;
+  /** Address of the Telegram queue server, for builds that don't have one built in. */
+  queueServer: string | null;
 }
 
 export interface AppInfo {
@@ -92,6 +94,46 @@ export interface DownloadResult {
   title: string | null;
   /** Something worth telling the user about how the download went (e.g. music left out). */
   note: string | null;
+}
+
+export interface QueueItem {
+  id: number;
+  url: string;
+  platform: Platform;
+  /** Unix seconds */
+  addedAt: number;
+}
+
+export interface LinkedChat {
+  label: string;
+  linkedAt: number;
+}
+
+export interface QueueView {
+  /** A queue server is known (built in, or typed in Settings). */
+  configured: boolean;
+  /** The user has started connecting Telegram. */
+  connected: boolean;
+  bot: string | null;
+  linked: LinkedChat[];
+  items: QueueItem[];
+  /** Unix seconds */
+  lastRefreshed: number | null;
+}
+
+export interface QueueRefresh {
+  view: QueueView;
+  /** Links that weren't in the queue before. */
+  added: number;
+}
+
+export interface PairInfo {
+  code: string;
+  /** Opens the bot with the code, e.g. https://t.me/FillernBot?start=ABCD2345 */
+  link: string;
+  bot: string;
+  /** Unix seconds */
+  expiresAt: number;
 }
 
 export interface ExportSpec {
@@ -165,6 +207,12 @@ export const api = {
 
   downloadLink: (url: string) => invoke<DownloadResult>("download_link", { url }),
   discardDownload: (path: string) => invoke<boolean>("discard_download", { path }),
+
+  queueGet: () => invoke<QueueView>("queue_get"),
+  queueRefresh: () => invoke<QueueRefresh>("queue_refresh"),
+  queuePair: () => invoke<PairInfo>("queue_pair"),
+  queueRemove: (id: number) => invoke<QueueView>("queue_remove", { id }),
+  queueDisconnect: () => invoke<QueueView>("queue_disconnect"),
 
   libraryList: () => invoke<WatermarkEntry[]>("library_list"),
   libraryAdd: (path: string) => invoke<WatermarkEntry>("library_add", { path }),

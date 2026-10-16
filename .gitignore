@@ -19,3 +19,7 @@ public/dev/
 
 # Test runs without a HOME write exports here
 src-tauri/FillernCut/
+
+# Local state of `wrangler dev` (queue-worker)
+.wrangler/
+.dev.vars

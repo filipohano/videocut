@@ -9,6 +9,7 @@ pub mod links;
 pub mod media;
 pub mod naming;
 pub mod progress;
+pub mod queue;
 pub mod settings;
 pub mod tiktok;
 pub mod watermark;
@@ -21,5 +22,6 @@ pub use export::{
 pub use history::{HistoryEntry, HistoryKind, HistoryStore, NewEntry};
 pub use links::{parse_link, LinkError, ParsedLink, Platform};
 pub use media::{parse_encoders, parse_ffprobe, parse_showinfo_size, EncoderSupport, MediaInfo};
+pub use queue::{QueueItem, QueueState, QueueStore};
 pub use settings::{CookieBrowser, Settings, UpdateMode};
 pub use watermark::{LibraryStore, TextStyle, WatermarkEntry, WatermarkPatch};

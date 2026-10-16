@@ -1351,3 +1351,76 @@ body.is-photo #panel-trim {
   border-color: transparent;
   opacity: 1;
 }
+
+/* ───────── Telegram queue ───────── */
+.queue-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  min-height: 28px;
+}
+.queue-head .section-title {
+  margin: 0;
+}
+.queue-head .grow,
+.queue-foot .grow {
+  flex: 1;
+}
+.queue-note {
+  margin: 0 0 10px;
+}
+.queue-list {
+  display: grid;
+  gap: 6px;
+}
+.queue-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.queue-item {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.queue-item:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.queue-item:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.queue-item .badge {
+  margin-right: 0;
+}
+.queue-link {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.queue-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.queue-code {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--field);
+  user-select: all;
+}

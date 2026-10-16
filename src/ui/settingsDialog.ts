@@ -123,6 +123,37 @@ export function initSettingsDialog(): void {
     cookies.value = s.cookiesBrowser ?? "";
     cookies.addEventListener("change", () => void save({ cookiesBrowser: (cookies.value || null) as CookieBrowser | null }));
 
+    // ───────── Telegram queue ─────────
+    const queueStatus = h("span", { class: "small muted" });
+    const showQueueStatus = async () => {
+      try {
+        const v = await api.queueGet();
+        const typed = (store.settings.queueServer ?? "") !== "";
+        queueStatus.className = `small ${typed && !v.configured ? "status-err" : "muted"}`;
+        queueStatus.textContent = v.configured
+          ? "Ready."
+          : typed
+            ? "That doesn't look like a valid address. It should start with https://"
+            : "No server address yet.";
+      } catch {
+        queueStatus.textContent = "";
+      }
+    };
+    const queueServer = h("input", {
+      type: "text",
+      spellcheck: false,
+      autocapitalize: "off",
+      placeholder: "https://fillerncut-queue.your-name.workers.dev",
+      "aria-label": "Queue server address",
+      value: s.queueServer ?? "",
+    }) as HTMLInputElement;
+    queueServer.addEventListener("change", async () => {
+      await save({ queueServer: queueServer.value.trim() || null });
+      queueServer.value = store.settings.queueServer ?? "";
+      await showQueueStatus();
+    });
+    void showQueueStatus();
+
     // ───────── folders ─────────
     const folderRow = (label: string, hint: string, current: string | null, resolve: () => Promise<string>, key: "exportDir") => {
       const path = h("span", { class: "path grow" }, current ?? "…");
@@ -221,6 +252,18 @@ export function initSettingsDialog(): void {
             "p",
             { class: "muted small", style: { margin: "0" } },
             `Instagram (and some X posts) need you to be logged in. Pick the browser you're logged into; cookies are only read locally by the downloader and never leave your ${store.platform === "macos" ? "Mac" : "PC"}.${store.platform === "macos" ? " Safari needs Full Disk Access for FillernCut (System Settings → Privacy & Security)." : ""}`,
+          ),
+        ),
+        h(
+          "section",
+          { class: "set-section" },
+          h("h3", {}, "Telegram queue"),
+          h("label", { class: "stack" }, "Queue server address", queueServer),
+          queueStatus,
+          h(
+            "p",
+            { class: "muted small", style: { margin: "0" } },
+            "Links you send to the Telegram bot wait on this server until FillernCut picks them up. Most versions of FillernCut have the address built in, so you only need this if it says the queue isn't set up. Everyone using the same bot uses the same address.",
           ),
         ),
         h("section", { class: "set-section" }, h("h3", {}, "Folders"), finishedRow, askRow),

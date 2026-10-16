@@ -9,6 +9,11 @@ Download, crop, trim and watermark videos on your Mac or Windows PC — everythi
   song the post plays (3 s per photo, or as long as the music for a single photo); without music a single photo opens
   as a photo to edit and a carousel becomes a silent video. Instagram only hands out the music to a logged-in
   browser (see below).
+- **Telegram queue.** Send TikTok, Instagram or X links to a Telegram bot from your phone and they wait in a
+  queue on the start screen: one tap opens one for editing. The app fetches the queue at launch and then every
+  30 minutes while it's open (**Refresh** fetches at once). Each person connects their own Telegram chat with a
+  one-time code, so your links only ever reach your copy of the app. Needs a small server you set up once, see
+  [queue-worker/](queue-worker/README.md).
 - **Photos too**: open a JPG, PNG or WebP and crop it, add watermarks and text, and export as JPG (with a quality
   slider) or PNG (lossless, keeps transparency). Phone photos that are stored sideways are handled.
 - **Editor** with a large live preview: drag-to-crop with aspect-ratio presets, trim in/out, and an exact
@@ -76,6 +81,17 @@ refreshed in the background at launch (toggle in Settings → Downloads), becaus
 - Only download content you have the right to use.
 
 ---
+
+## Telegram queue
+
+The queue server (a free Cloudflare Worker, set up once) and the bot are described in
+[queue-worker/README.md](queue-worker/README.md). Once it is online, give the address to the app either by
+adding the repository variable `FILLERNCUT_QUEUE_URL` (releases then have it built in) or in
+*Settings → Telegram queue*. Then, in the app, **Telegram queue → Connect Telegram** links a chat.
+
+- Links you send are kept on the server only until the app has picked them up (at most 30 days).
+- The server knows the links, the Telegram first name and chat id of connected chats, and a hash of
+  each copy of the app's secret.
 
 ## Development
 

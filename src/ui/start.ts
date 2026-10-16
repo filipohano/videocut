@@ -7,7 +7,7 @@ import { store } from "../store";
 import { $ } from "./dom";
 import { toast } from "./toast";
 
-export function initStart(openVideo: (path: string) => Promise<boolean>): void {
+export function initStart(openVideo: (path: string) => Promise<boolean>): { fetchLink: (url: string) => Promise<boolean> } {
   const dropzone = $("#dropzone");
   const form = $<HTMLFormElement>("#link-form");
   const input = $<HTMLInputElement>("#link-input");
@@ -41,12 +41,15 @@ export function initStart(openVideo: (path: string) => Promise<boolean>): void {
     input.disabled = store.busy;
   });
 
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const text = input.value.trim();
-    if (!text) return toast("Paste a TikTok, Instagram or X link first", { kind: "info" });
-    if (store.busy) return;
-
+  /**
+   * Download a link and open it in the editor (shared by the link box and the Telegram
+   * queue). Returns whether it was opened.
+   */
+  async function fetchLink(text: string): Promise<boolean> {
+    if (store.busy) {
+      toast("Wait for the current job to finish first", { kind: "info" });
+      return false;
+    }
     store.setBusy(true);
     progress.classList.remove("hidden");
     let downloaded: string | null = null;
@@ -55,8 +58,10 @@ export function initStart(openVideo: (path: string) => Promise<boolean>): void {
       const result = await withProgress("download", bar, label, () => api.downloadLink(text), "Looking up the post…");
       downloaded = result.path;
       note = result.note;
-      input.value = "";
-      badge.classList.add("hidden");
+      if (input.value.trim() === text) {
+        input.value = "";
+        badge.classList.add("hidden");
+      }
     } catch (err) {
       const msg = errorMessage(err);
       toast(msg === CANCELLED ? "Download cancelled" : msg, { kind: msg === CANCELLED ? "info" : "error", timeout: 12000 });
@@ -65,7 +70,17 @@ export function initStart(openVideo: (path: string) => Promise<boolean>): void {
       store.setBusy(false);
     }
     // The busy flag has to be cleared first: opening a video refuses to run while busy.
-    if (downloaded) await openVideo(downloaded);
-    if (downloaded && note) toast(note, { kind: "info", timeout: 15000 });
+    const opened = downloaded ? await openVideo(downloaded) : false;
+    if (opened && note) toast(note, { kind: "info", timeout: 15000 });
+    return opened;
+  }
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return toast("Paste a TikTok, Instagram or X link first", { kind: "info" });
+    void fetchLink(text);
   });
+
+  return { fetchLink };
 }

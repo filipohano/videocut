@@ -16,6 +16,7 @@ import { initHistoryDialog } from "./ui/historyDialog";
 import { initCropPanel, initOutputPanel, initTrimPanel } from "./ui/panels";
 import { initSettingsDialog } from "./ui/settingsDialog";
 import { initStage } from "./ui/stage";
+import { initQueue } from "./ui/queue";
 import { initStart } from "./ui/start";
 import { shortcut } from "./lib/platform";
 import { toast } from "./ui/toast";
@@ -45,7 +46,8 @@ async function boot(): Promise<void> {
 
   const stage = initStage();
   initSession(stage);
-  initStart(openVideo);
+  const { fetchLink } = initStart(openVideo);
+  initQueue(fetchLink);
   initCropPanel();
   initTrimPanel(stage);
   initWatermarkPanel();

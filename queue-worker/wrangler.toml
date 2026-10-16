@@ -1,0 +1,14 @@
+# Cloudflare Worker for the FillernCut Telegram queue. See README.md for the setup steps.
+name = "fillerncut-queue"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[vars]
+# The bot's username from @BotFather, without the @.
+BOT_USERNAME = "REPLACE_WITH_BOT_USERNAME"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fillerncut-queue"
+# Printed by `npx wrangler d1 create fillerncut-queue`.
+database_id = "REPLACE_WITH_DATABASE_ID"

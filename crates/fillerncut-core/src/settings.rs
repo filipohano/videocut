@@ -59,6 +59,8 @@ pub struct Settings {
     pub export_image_quality: u8,
     /// Which H.264 encoder to use: "auto" (best available) or an `Encoder::id()`.
     pub encoder: String,
+    /// Address of the Telegram queue server, for builds that don't have one built in.
+    pub queue_server: Option<String>,
 }
 
 impl Default for Settings {
@@ -72,6 +74,7 @@ impl Default for Settings {
             export_quality: 60,
             export_image_quality: 90,
             encoder: "auto".into(),
+            queue_server: None,
         }
     }
 }
@@ -90,6 +93,10 @@ impl Settings {
     pub fn sanitized(mut self) -> Settings {
         self.export_quality = self.export_quality.clamp(1, 100);
         self.export_image_quality = self.export_image_quality.clamp(1, 100);
+        self.queue_server = self
+            .queue_server
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty());
         if crate::export::Encoder::from_id(&self.encoder).is_none() {
             self.encoder = "auto".into();
         }
@@ -121,6 +128,24 @@ mod tests {
         assert_eq!(s.update_mode, UpdateMode::Auto);
         assert!(s.auto_update_ytdlp);
         assert_eq!(s.cookies_browser, None);
+    }
+
+    #[test]
+    fn the_queue_server_address_is_tidied_and_empty_means_none() {
+        let tidy = |text: &str| {
+            Settings {
+                queue_server: Some(text.into()),
+                ..Settings::default()
+            }
+            .sanitized()
+            .queue_server
+        };
+        assert_eq!(
+            tidy("  https://q.example.dev/ "),
+            Some("https://q.example.dev".into())
+        );
+        assert_eq!(tidy("   "), None);
+        assert_eq!(Settings::default().queue_server, None);
     }
 
     #[test]
