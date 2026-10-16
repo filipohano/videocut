@@ -1,6 +1,8 @@
 //! Downloading posts from TikTok, Instagram and X/Twitter.
 //!
-//! * Instagram and X go through yt-dlp.
+//! * Instagram and X go through yt-dlp. An Instagram post made of pictures has no video
+//!   for yt-dlp to download, so its pictures are fetched instead: one picture is a photo
+//!   to edit, several are built into a video like a TikTok photo post.
 //! * TikTok goes through a watermark-free API first (original quality, and the
 //!   only way to get photo posts), falling back to yt-dlp for plain videos.
 
@@ -9,7 +11,10 @@ use fillerncut_core::export::{
 };
 use fillerncut_core::links::{parse_link, tiktok_id_from_resolved, ParsedLink, Platform};
 use fillerncut_core::tiktok::{api_query_url, parse_response, TikTokError, TikTokMedia, API_HOST};
-use fillerncut_core::ytdlp::{build_args, explain_error, parse_line, DownloadOptions, YtDlpLine};
+use fillerncut_core::ytdlp::{
+    build_args, build_info_args, explain_error, is_no_video_error, parse_line, parse_photo_post,
+    DownloadOptions, YtDlpLine,
+};
 use futures_util::StreamExt;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -177,6 +182,13 @@ async fn download_with_ytdlp<R: Runtime>(
     let status = child.wait().await.map_err(|e| e.to_string())?;
     let stderr = stderr_task.await.unwrap_or_default();
     if !status.success() {
+        if matches!(platform, Platform::Instagram) && is_no_video_error(&stderr) {
+            if let Some(path) =
+                download_instagram_photos(app, state, token, &program, &opts, out_dir, stem).await?
+            {
+                return Ok(path);
+            }
+        }
         return Err(explain_error(
             &stderr,
             platform,
@@ -189,6 +201,45 @@ async fn download_with_ytdlp<R: Runtime>(
     }
     emit_progress(app, JOB, Some(1.0), None);
     Ok(PathBuf::from(path))
+}
+
+/// An Instagram post made of pictures has nothing for yt-dlp to download, but yt-dlp still
+/// knows where the pictures are. One picture comes back as a photo (the editor opens those),
+/// several become a video like a TikTok photo post. `None` when the post isn't a photo post
+/// after all, so the caller can show yt-dlp's own error.
+async fn download_instagram_photos<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    token: &CancellationToken,
+    program: &Path,
+    opts: &DownloadOptions,
+    out_dir: &Path,
+    stem: &str,
+) -> Result<Option<PathBuf>, String> {
+    emit_progress(app, JOB, None, Some("Looking for the photos…"));
+    let args = build_info_args(opts);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let answer = tokio::select! {
+        _ = token.cancelled() => return Err(CANCELLED.into()),
+        r = jobs::capture(program, &args) => r,
+    };
+    let Some(images) = answer.ok().and_then(|json| parse_photo_post(&json)) else {
+        return Ok(None);
+    };
+
+    let client = http_client()?;
+    if let [url] = images.as_slice() {
+        let dest = out_dir.join(format!("{stem}.jpg"));
+        emit_progress(app, JOB, Some(0.0), Some("Downloading the photo…"));
+        download_file(&client, url, &dest, token, |f| {
+            emit_progress(app, JOB, Some(f), Some("Downloading the photo…"))
+        })
+        .await?;
+        return Ok(Some(dest));
+    }
+    build_photo_slideshow(app, state, token, &client, stem, &images, None, out_dir, stem)
+        .await
+        .map(Some)
 }
 
 // ───────────────────────────── TikTok ─────────────────────────────

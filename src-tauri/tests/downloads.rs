@@ -110,6 +110,14 @@ fn serve(mut s: std::net::TcpStream, video: &[u8], imgs: &[Vec<u8>], music: &[u8
 const FAKE_YTDLP: &str = r#"#!/usr/bin/env bash
 here="$(cd "$(dirname "$0")" && pwd)"
 [ "$1" = "--version" ] && { echo 2026.01.01; exit 0; }
+for a in "$@"; do
+  if [ "$a" = "--dump-single-json" ]; then
+    # The "what is in this post?" lookup, kept apart from the download call.
+    printf '%s\n' "$@" > "$here/info-args.txt"
+    [ -f "$here/info.json" ] && { cat "$here/info.json"; exit 0; }
+    echo "ERROR: nothing known about this post" >&2; exit 1
+  fi
+done
 printf '%s\n' "$@" > "$here/args.txt"
 [ -f "$here/slow.txt" ] && exec sleep 30
 if [ -f "$here/fail.txt" ]; then cat "$here/fail.txt" >&2; exit 1; fi
@@ -309,6 +317,148 @@ fn instagram_goes_through_ytdlp_with_the_selected_browser_cookies() {
         p.contains(&0.5) && p.contains(&1.0),
         "yt-dlp progress is forwarded: {p:?}"
     );
+}
+
+// ───────────────────────── Instagram posts made of pictures ─────────────────────────
+
+/// What yt-dlp prints for a photo post: no formats, the pictures smallest first.
+fn photo_post_info(host: &str, count: usize) -> String {
+    let slide = |i: usize| {
+        json!({ "formats": [], "duration": null, "thumbnails": [
+            { "id": "0", "url": format!("{host}/small-{i}.png") },
+            { "id": "1", "url": format!("{host}/img{i}.png") },
+        ]})
+    };
+    if count == 1 {
+        slide(0).to_string()
+    } else {
+        json!({ "_type": "playlist", "entries": (0..count).map(slide).collect::<Vec<_>>() }).to_string()
+    }
+}
+
+#[test]
+fn instagram_photo_post_is_downloaded_as_a_photo_to_edit() {
+    let Some(h) = harness() else { return };
+    let host = fixture().host.clone();
+    let dir = set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    let mut s = call(&h.win, "get_settings", json!({})).unwrap();
+    s["cookiesBrowser"] = json!("chrome");
+    call(&h.win, "save_settings", json!({ "settings": s })).unwrap();
+    std::fs::write(
+        bin.join("fail.txt"),
+        "ERROR: [Instagram] C1a2: There is no video in this post\n",
+    )
+    .unwrap();
+    std::fs::write(bin.join("info.json"), photo_post_info(&host, 1)).unwrap();
+
+    let res = call(
+        &h.win,
+        "download_link",
+        json!({ "url": "https://www.instagram.com/p/C1a2B3c4D5e/?img_index=1" }),
+    )
+    .unwrap();
+    assert_eq!(res["platform"], "instagram");
+    let path = res["path"].as_str().unwrap();
+    assert_eq!(Path::new(path).parent().unwrap(), dir);
+    assert!(path.ends_with(".jpg"), "{path}");
+    let probe = call(&h.win, "probe_media", json!({ "path": path })).unwrap();
+    assert_eq!(probe["isImage"], true, "it opens in the photo editor");
+    assert_eq!(
+        (probe["width"].as_u64(), probe["height"].as_u64()),
+        (Some(540), Some(720)),
+        "the biggest picture, not the small one"
+    );
+
+    // The lookup used the same login and the cleaned-up link, and never downloaded.
+    let info: Vec<String> = std::fs::read_to_string(bin.join("info-args.txt"))
+        .unwrap()
+        .lines()
+        .map(String::from)
+        .collect();
+    let i = info.iter().position(|a| a == "--cookies-from-browser").unwrap();
+    assert_eq!(info[i + 1], "chrome");
+    assert!(info.contains(&"--no-download".to_string()));
+    assert_eq!(info.last().unwrap(), "https://www.instagram.com/p/C1a2B3c4D5e/");
+}
+
+#[test]
+fn instagram_carousel_of_photos_becomes_a_portrait_slideshow() {
+    let Some(h) = harness() else { return };
+    let host = fixture().host.clone();
+    let dir = set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    // A carousel is reported differently from a single photo.
+    std::fs::write(
+        bin.join("fail.txt"),
+        "ERROR: [Instagram] C9: No video formats found!\n",
+    )
+    .unwrap();
+    std::fs::write(bin.join("info.json"), photo_post_info(&host, 3)).unwrap();
+
+    let res = call(
+        &h.win,
+        "download_link",
+        json!({ "url": "https://www.instagram.com/p/C9a2B3c4D5e/" }),
+    )
+    .unwrap();
+    let path = res["path"].as_str().unwrap();
+    assert_timestamp_named(path, &dir);
+    let (w, hgt, dur) = dims(path);
+    assert_eq!((w, hgt), (1080, 1920));
+    assert!((dur - 9.0).abs() < 0.3, "3 photos x 3 s, got {dur}");
+    assert!(
+        std::fs::read_dir(h.dir.path().join("cache"))
+            .unwrap()
+            .flatten()
+            .all(|e| !e.file_name().to_string_lossy().starts_with("slideshow-")),
+        "scratch folder is cleaned up"
+    );
+}
+
+#[test]
+fn an_instagram_video_that_fails_is_never_turned_into_a_cover_picture() {
+    let Some(h) = harness() else { return };
+    let host = fixture().host.clone();
+    set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    std::fs::write(
+        bin.join("fail.txt"),
+        "ERROR: [Instagram] R1: There is no video in this post\n",
+    )
+    .unwrap();
+    // The lookup says it has a length, so it's a reel and not a photo.
+    let reel =
+        json!({ "formats": [], "duration": 12.0, "thumbnails": [{ "url": format!("{host}/img0.png") }] });
+    std::fs::write(bin.join("info.json"), reel.to_string()).unwrap();
+
+    let err = call(
+        &h.win,
+        "download_link",
+        json!({ "url": "https://www.instagram.com/reel/R1a2B3c4D5e/" }),
+    )
+    .unwrap_err();
+    assert_eq!(err.as_str().unwrap(), "That post doesn't contain a video.");
+}
+
+#[test]
+fn when_the_picture_lookup_fails_the_original_explanation_is_shown() {
+    let Some(h) = harness() else { return };
+    set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    std::fs::write(
+        bin.join("fail.txt"),
+        "ERROR: [Instagram] C1: There is no video in this post\n",
+    )
+    .unwrap();
+    // No info.json: the fake downloader fails the second look as well.
+    let err = call(
+        &h.win,
+        "download_link",
+        json!({ "url": "https://www.instagram.com/p/C1a2B3c4D5e/" }),
+    )
+    .unwrap_err();
+    assert_eq!(err.as_str().unwrap(), "That post doesn't contain a video.");
 }
 
 #[test]

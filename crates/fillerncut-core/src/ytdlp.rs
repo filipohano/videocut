@@ -62,6 +62,86 @@ pub fn build_args(opts: &DownloadOptions) -> Vec<String> {
     a
 }
 
+/// Arguments that make yt-dlp print what it knows about a post as one JSON document,
+/// without downloading anything and without failing on a post that has no video in it.
+/// Used to find the pictures of a photo post.
+pub fn build_info_args(opts: &DownloadOptions) -> Vec<String> {
+    let mut a: Vec<String> = vec![
+        "--no-playlist".into(),
+        "--no-warnings".into(),
+        "--ignore-no-formats-error".into(),
+        "--no-download".into(),
+        "--dump-single-json".into(),
+    ];
+    if let Some(browser) = opts.cookies_browser {
+        a.push("--cookies-from-browser".into());
+        a.push(browser.ytdlp_name().into());
+    }
+    a.push("--".into());
+    a.push(opts.url.clone());
+    a
+}
+
+/// yt-dlp refused the post because there is no video in it: a photo post (or X
+/// tweet with only pictures). Instagram says "There is no video in this post" for a
+/// single photo and "No video formats found!" for a carousel of photos.
+pub fn is_no_video_error(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("there is no video in this post")
+        || lower.contains("no video could be found")
+        || lower.contains("no video formats found")
+}
+
+/// The best picture of each photo in a photo post, in post order, from the JSON of
+/// [`build_info_args`]. `None` when this isn't a photo post: yt-dlp lists
+/// formats or a duration for anything that is a video, and then we must not quietly
+/// turn the post's cover picture into the "video".
+pub fn parse_photo_post(json: &str) -> Option<Vec<String>> {
+    let post: serde_json::Value = serde_json::from_str(json).ok()?;
+    let items: Vec<&serde_json::Value> = match post.get("entries").and_then(|e| e.as_array()) {
+        Some(entries) => entries.iter().collect(),
+        None => vec![&post],
+    };
+    if items.is_empty() {
+        return None;
+    }
+    items.into_iter().map(photo_url).collect()
+}
+
+fn photo_url(item: &serde_json::Value) -> Option<String> {
+    if !item.is_object() {
+        return None;
+    }
+    let has_formats = item
+        .get("formats")
+        .and_then(|f| f.as_array())
+        .is_some_and(|f| !f.is_empty());
+    let duration = item.get("duration").and_then(|d| d.as_f64()).unwrap_or(0.0);
+    if has_formats || duration > 0.0 {
+        return None;
+    }
+    // yt-dlp lists the pictures smallest first. Instagram gives no sizes, so the last
+    // one is the full-size picture; when sizes are known, the biggest wins.
+    let candidates: Vec<(&str, u64)> = item
+        .get("thumbnails")
+        .and_then(|t| t.as_array())?
+        .iter()
+        .filter_map(|t| {
+            let url = t.get("url")?.as_str()?;
+            let area = t.get("width").and_then(|w| w.as_u64()).unwrap_or(0)
+                * t.get("height").and_then(|h| h.as_u64()).unwrap_or(0);
+            (url.starts_with("https://") || url.starts_with("http://")).then_some((url, area))
+        })
+        .collect();
+    let best = candidates
+        .iter()
+        .enumerate()
+        .max_by_key(|(i, (_, area))| (*area, *i))
+        .map(|(_, (url, _))| *url)
+        .or_else(|| item.get("thumbnail").and_then(|t| t.as_str()))?;
+    Some(best.to_string())
+}
+
 /// Find the SHA-256 for `file_name` in a `SHA2-256SUMS` listing (`<hash>  <name>` per line).
 pub fn checksum_for(sums: &str, file_name: &str) -> Option<String> {
     sums.lines().find_map(|line| {
@@ -131,7 +211,7 @@ pub fn explain_error(stderr: &str, platform: Platform, used_cookies: bool) -> St
     if lower.contains("unsupported url") {
         return "That link isn't a downloadable post.".into();
     }
-    if lower.contains("no video could be found") || lower.contains("there is no video in this post") {
+    if is_no_video_error(stderr) {
         return "That post doesn't contain a video.".into();
     }
     if lower.contains("unable to download webpage")
@@ -293,6 +373,90 @@ mod tests {
             explain_error("ERROR: Unsupported URL: https://x", Platform::Twitter, false)
                 .contains("isn't a downloadable")
         );
+    }
+
+    #[test]
+    fn info_args_ask_for_json_even_without_a_video() {
+        let mut o = opts();
+        o.cookies_browser = Some(CookieBrowser::Chrome);
+        let a = build_info_args(&o);
+        for flag in ["--ignore-no-formats-error", "--dump-single-json", "--no-download"] {
+            assert!(a.contains(&flag.to_string()), "{flag}");
+        }
+        let i = a.iter().position(|x| x == "--cookies-from-browser").unwrap();
+        assert_eq!(a[i + 1], "chrome");
+        assert_eq!(a[a.len() - 2], "--");
+        assert_eq!(a[a.len() - 1], "https://x.com/jack/status/20");
+    }
+
+    #[test]
+    fn photo_posts_are_recognised_from_yt_dlps_errors() {
+        assert!(is_no_video_error(
+            "ERROR: [Instagram] C1: There is no video in this post"
+        ));
+        assert!(is_no_video_error(
+            "ERROR: [Instagram] C1: No video formats found!; please report"
+        ));
+        assert!(is_no_video_error("ERROR: No video could be found in this tweet"));
+        assert!(!is_no_video_error("ERROR: [Instagram] C1: Login required"));
+        assert!(!is_no_video_error(""));
+    }
+
+    #[test]
+    fn single_photo_uses_the_last_and_biggest_picture() {
+        // What yt-dlp prints for a real Instagram photo: no sizes, smallest first.
+        let json = r#"{"formats":[],"duration":null,"thumbnail":"https://cdn/x/full.jpg",
+            "thumbnails":[{"id":"0","url":"https://cdn/x/s150.jpg"},{"id":"1","url":"https://cdn/x/s480.jpg"},{"id":"2","url":"https://cdn/x/full.jpg"}]}"#;
+        assert_eq!(
+            parse_photo_post(json),
+            Some(vec!["https://cdn/x/full.jpg".to_string()])
+        );
+        // With sizes, the biggest wins whatever the order.
+        let sized = r#"{"formats":[],"thumbnails":[
+            {"url":"https://cdn/big.jpg","width":1080,"height":1350},
+            {"url":"https://cdn/small.jpg","width":320,"height":400}]}"#;
+        assert_eq!(
+            parse_photo_post(sized),
+            Some(vec!["https://cdn/big.jpg".to_string()])
+        );
+    }
+
+    #[test]
+    fn carousel_gives_one_picture_per_slide_in_order() {
+        let json = r#"{"_type":"playlist","entries":[
+            {"formats":[],"thumbnails":[{"url":"https://cdn/a1.jpg"},{"url":"https://cdn/a2.jpg"}]},
+            {"formats":[],"thumbnails":[{"url":"https://cdn/b1.jpg"},{"url":"https://cdn/b2.jpg"}]}]}"#;
+        assert_eq!(
+            parse_photo_post(json),
+            Some(vec![
+                "https://cdn/a2.jpg".to_string(),
+                "https://cdn/b2.jpg".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn videos_and_unusable_answers_are_not_photo_posts() {
+        let pic = r#"{"url":"https://cdn/c.jpg"}"#;
+        // A reel that yt-dlp couldn't get formats for still has a duration.
+        let reel = format!(r#"{{"formats":[],"duration":12.5,"thumbnails":[{pic}]}}"#);
+        assert_eq!(parse_photo_post(&reel), None);
+        let with_formats = format!(r#"{{"formats":[{{"url":"https://v"}}],"thumbnails":[{pic}]}}"#);
+        assert_eq!(parse_photo_post(&with_formats), None);
+        // One video among the photos of a carousel: don't drop it silently.
+        let mixed = format!(
+            r#"{{"entries":[{{"formats":[],"thumbnails":[{pic}]}},{{"duration":4,"formats":[],"thumbnails":[{pic}]}}]}}"#
+        );
+        assert_eq!(parse_photo_post(&mixed), None);
+        // A failed slide, no pictures at all, links that aren't web links, junk.
+        assert_eq!(parse_photo_post(r#"{"entries":[null]}"#), None);
+        assert_eq!(parse_photo_post(r#"{"entries":[]}"#), None);
+        assert_eq!(parse_photo_post(r#"{"formats":[],"thumbnails":[]}"#), None);
+        assert_eq!(
+            parse_photo_post(r#"{"formats":[],"thumbnails":[{"url":"file:///etc/passwd"}]}"#),
+            None
+        );
+        assert_eq!(parse_photo_post("not json"), None);
     }
 
     #[test]
