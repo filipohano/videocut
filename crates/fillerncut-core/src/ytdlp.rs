@@ -64,7 +64,7 @@ pub fn build_args(opts: &DownloadOptions) -> Vec<String> {
 
 /// Arguments that make yt-dlp print what it knows about a post as one JSON document,
 /// without downloading anything and without failing on a post that has no video in it.
-/// Used to find the pictures of a photo post.
+/// Used to find the pictures (and music) of a photo post.
 pub fn build_info_args(opts: &DownloadOptions) -> Vec<String> {
     let mut a: Vec<String> = vec![
         "--no-playlist".into(),
@@ -72,6 +72,10 @@ pub fn build_info_args(opts: &DownloadOptions) -> Vec<String> {
         "--ignore-no-formats-error".into(),
         "--no-download".into(),
         "--dump-single-json".into(),
+        // yt-dlp's JSON leaves out the post's music, but the answers it got from
+        // Instagram have it. These are written to the current directory, so the
+        // caller must run this in a scratch folder.
+        "--write-pages".into(),
     ];
     if let Some(browser) = opts.cookies_browser {
         a.push("--cookies-from-browser".into());
@@ -140,6 +144,52 @@ fn photo_url(item: &serde_json::Value) -> Option<String> {
         .map(|(_, (url, _))| *url)
         .or_else(|| item.get("thumbnail").and_then(|t| t.as_str()))?;
     Some(best.to_string())
+}
+
+/// The sound attached to an Instagram photo post.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PostMusic {
+    pub url: String,
+    /// Where in the track the post starts playing it, in seconds.
+    pub start: f64,
+    /// How much of the track the post plays, in seconds, when Instagram says.
+    pub length: Option<f64>,
+}
+
+/// Look for a post's music in one of the answers yt-dlp got from Instagram (a page
+/// written by `--write-pages`). Only the logged-in answer has it, and only when the
+/// post has music; anything else, including web pages, gives `None`.
+pub fn parse_post_music(page: &str) -> Option<PostMusic> {
+    let doc: serde_json::Value = serde_json::from_str(page).ok()?;
+    let scope = find_key(&doc, "music_metadata").or_else(|| find_key(&doc, "clips_metadata"))?;
+    let asset = find_key(scope, "music_asset_info")?;
+    let url = ["progressive_download_url", "fast_start_progressive_download_url"]
+        .iter()
+        .find_map(|key| asset.get(*key)?.as_str())
+        .filter(|u| u.starts_with("https://") || u.starts_with("http://"))?;
+    let seconds = |key: &str| {
+        find_key(scope, key)
+            .and_then(|v| v.as_f64())
+            .filter(|ms| ms.is_finite() && *ms >= 0.0)
+            .map(|ms| ms / 1000.0)
+    };
+    Some(PostMusic {
+        url: url.to_string(),
+        start: seconds("audio_asset_start_time_in_ms").unwrap_or(0.0),
+        length: seconds("overlap_duration_in_ms").filter(|l| *l > 0.0),
+    })
+}
+
+/// The first non-null value stored under `key`, at any depth.
+fn find_key<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    match value {
+        serde_json::Value::Object(map) => map
+            .get(key)
+            .filter(|v| !v.is_null())
+            .or_else(|| map.values().find_map(|v| find_key(v, key))),
+        serde_json::Value::Array(items) => items.iter().find_map(|v| find_key(v, key)),
+        _ => None,
+    }
 }
 
 /// Find the SHA-256 for `file_name` in a `SHA2-256SUMS` listing (`<hash>  <name>` per line).
@@ -380,7 +430,12 @@ mod tests {
         let mut o = opts();
         o.cookies_browser = Some(CookieBrowser::Chrome);
         let a = build_info_args(&o);
-        for flag in ["--ignore-no-formats-error", "--dump-single-json", "--no-download"] {
+        for flag in [
+            "--ignore-no-formats-error",
+            "--dump-single-json",
+            "--no-download",
+            "--write-pages",
+        ] {
             assert!(a.contains(&flag.to_string()), "{flag}");
         }
         let i = a.iter().position(|x| x == "--cookies-from-browser").unwrap();
@@ -457,6 +512,75 @@ mod tests {
             None
         );
         assert_eq!(parse_photo_post("not json"), None);
+    }
+
+    fn music_answer(extra: &str) -> String {
+        format!(
+            r#"{{"items":[{{"code":"C1","media_type":8,"music_metadata":{{"music_canonical_id":"1",
+            "music_info":{{"music_asset_info":{{"title":"Song","duration_in_ms":180000,
+              "progressive_download_url":"https://cdn/audio/full.m4a",
+              "fast_start_progressive_download_url":"https://cdn/audio/fast.m4a"}},
+            "music_consumption_info":{{{extra}}}}}}}}}]}}"#
+        )
+    }
+
+    #[test]
+    fn finds_the_music_of_a_photo_post_and_the_part_it_plays() {
+        let page = music_answer(r#""audio_asset_start_time_in_ms":42000,"overlap_duration_in_ms":20000"#);
+        assert_eq!(
+            parse_post_music(&page),
+            Some(PostMusic {
+                url: "https://cdn/audio/full.m4a".into(),
+                start: 42.0,
+                length: Some(20.0)
+            })
+        );
+        // Without a stated stretch the whole track is meant.
+        assert_eq!(
+            parse_post_music(&music_answer("")),
+            Some(PostMusic {
+                url: "https://cdn/audio/full.m4a".into(),
+                start: 0.0,
+                length: None
+            })
+        );
+        // A nonsense stretch is ignored rather than trusted.
+        let odd = music_answer(r#""audio_asset_start_time_in_ms":-5,"overlap_duration_in_ms":0"#);
+        let m = parse_post_music(&odd).unwrap();
+        assert_eq!((m.start, m.length), (0.0, None));
+    }
+
+    #[test]
+    fn music_falls_back_to_the_fast_start_link_and_to_reel_style_metadata() {
+        let fast = r#"{"music_metadata":{"music_info":{"music_asset_info":
+            {"fast_start_progressive_download_url":"https://cdn/fast.m4a"}}}}"#;
+        assert_eq!(parse_post_music(fast).unwrap().url, "https://cdn/fast.m4a");
+        let clips = r#"{"media":{"clips_metadata":{"music_info":{"music_asset_info":
+            {"progressive_download_url":"https://cdn/clip.m4a"}}}}}"#;
+        assert_eq!(parse_post_music(clips).unwrap().url, "https://cdn/clip.m4a");
+    }
+
+    #[test]
+    fn posts_without_music_or_with_unusable_answers_have_none() {
+        assert_eq!(
+            parse_post_music(r#"{"items":[{"music_metadata":null,"clips_metadata":null}]}"#),
+            None
+        );
+        assert_eq!(parse_post_music(r#"{"items":[{"media_type":1}]}"#), None);
+        // Music is listed but there is nothing to download, or not over the web.
+        assert_eq!(
+            parse_post_music(r#"{"music_metadata":{"music_info":{"music_asset_info":{"title":"x"}}}}"#),
+            None
+        );
+        assert_eq!(
+            parse_post_music(
+                r#"{"music_metadata":{"music_info":{"music_asset_info":{"progressive_download_url":"file:///etc/passwd"}}}}"#
+            ),
+            None
+        );
+        // The logged-out web page is HTML, not JSON.
+        assert_eq!(parse_post_music("<html><script>{}</script></html>"), None);
+        assert_eq!(parse_post_music(""), None);
     }
 
     #[test]

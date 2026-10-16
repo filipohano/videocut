@@ -13,7 +13,7 @@ use fillerncut_core::links::{parse_link, tiktok_id_from_resolved, ParsedLink, Pl
 use fillerncut_core::tiktok::{api_query_url, parse_response, TikTokError, TikTokMedia, API_HOST};
 use fillerncut_core::ytdlp::{
     build_args, build_info_args, explain_error, is_no_video_error, parse_line, parse_photo_post,
-    DownloadOptions, YtDlpLine,
+    parse_post_music, DownloadOptions, PostMusic, YtDlpLine,
 };
 use futures_util::StreamExt;
 use serde::Serialize;
@@ -39,6 +39,8 @@ pub struct DownloadResult {
     pub path: String,
     pub platform: Platform,
     pub title: Option<String>,
+    /// Something worth telling the user about how the download went.
+    pub note: Option<String>,
 }
 
 /// The TikTok download API. Overridable so the integration tests can point it
@@ -86,24 +88,25 @@ pub async fn download_link<R: Runtime>(
     emit_progress(&app, JOB, None, Some("Looking up the post…"));
 
     let platform = link.platform();
-    let result = match &link {
+    let (path, title, note) = match &link {
         ParsedLink::TikTok { .. } | ParsedLink::TikTokShort { .. } => {
-            download_tiktok(&app, &state, &guard.token, &link, &out_dir, &stem).await
+            let (path, title) = download_tiktok(&app, &state, &guard.token, &link, &out_dir, &stem).await?;
+            (path, title, None)
         }
         ParsedLink::Instagram { url } | ParsedLink::Twitter { url } => {
-            download_with_ytdlp(&app, &state, &guard.token, url, platform, &out_dir, &stem)
-                .await
-                .map(|p| (p, None))
+            let (path, note) =
+                download_with_ytdlp(&app, &state, &guard.token, url, platform, &out_dir, &stem).await?;
+            (path, None, note)
         }
-    }?;
+    };
 
-    let (path, title) = result;
     allow_asset(&app, &path);
     // Not added to the history: the file is deleted once the export is done.
     Ok(DownloadResult {
         path: path.to_string_lossy().into_owned(),
         platform,
         title,
+        note,
     })
 }
 
@@ -117,7 +120,7 @@ async fn download_with_ytdlp<R: Runtime>(
     platform: Platform,
     out_dir: &Path,
     stem: &str,
-) -> Result<PathBuf, String> {
+) -> Result<(PathBuf, Option<String>), String> {
     let settings = state.settings();
     let opts = DownloadOptions {
         url: url.to_string(),
@@ -183,10 +186,10 @@ async fn download_with_ytdlp<R: Runtime>(
     let stderr = stderr_task.await.unwrap_or_default();
     if !status.success() {
         if matches!(platform, Platform::Instagram) && is_no_video_error(&stderr) {
-            if let Some(path) =
+            if let Some(found) =
                 download_instagram_photos(app, state, token, &program, &opts, out_dir, stem).await?
             {
-                return Ok(path);
+                return Ok(found);
             }
         }
         return Err(explain_error(
@@ -200,13 +203,22 @@ async fn download_with_ytdlp<R: Runtime>(
         return Err("The download finished but the file is missing".into());
     }
     emit_progress(app, JOB, Some(1.0), None);
-    Ok(PathBuf::from(path))
+    Ok((PathBuf::from(path), None))
 }
 
+/// What yt-dlp found out about a photo post.
+struct PhotoPost {
+    images: Vec<String>,
+    music: Option<PostMusic>,
+}
+
+const NO_LOGIN_HINT: &str = "If this post has music, choose the browser you're logged into Instagram with in Settings → Downloads, then add the link again to get it.";
+const MUSIC_FAILED: &str = "This post's music couldn't be downloaded, so it has no sound.";
+
 /// An Instagram post made of pictures has nothing for yt-dlp to download, but yt-dlp still
-/// knows where the pictures are. One picture comes back as a photo (the editor opens those),
-/// several become a video like a TikTok photo post. `None` when the post isn't a photo post
-/// after all, so the caller can show yt-dlp's own error.
+/// knows where the pictures are. With music (one photo or several) the result is a video
+/// like a TikTok photo post; one picture without music is a photo to edit. `None` when the
+/// post isn't a photo post after all, so the caller can show yt-dlp's own error.
 async fn download_instagram_photos<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
@@ -215,31 +227,117 @@ async fn download_instagram_photos<R: Runtime>(
     opts: &DownloadOptions,
     out_dir: &Path,
     stem: &str,
-) -> Result<Option<PathBuf>, String> {
+) -> Result<Option<(PathBuf, Option<String>)>, String> {
     emit_progress(app, JOB, None, Some("Looking for the photos…"));
-    let args = build_info_args(opts);
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let answer = tokio::select! {
-        _ = token.cancelled() => return Err(CANCELLED.into()),
-        r = jobs::capture(program, &args) => r,
-    };
-    let Some(images) = answer.ok().and_then(|json| parse_photo_post(&json)) else {
+    let work = state.cache_dir.join(format!("instagram-{stem}"));
+    let _ = tokio::fs::remove_dir_all(&work).await;
+    tokio::fs::create_dir_all(&work)
+        .await
+        .map_err(|e| e.to_string())?;
+    let found = look_up_photo_post(token, program, opts, &work).await;
+    let _ = tokio::fs::remove_dir_all(&work).await;
+    let Some(post) = found? else {
         return Ok(None);
     };
 
     let client = http_client()?;
-    if let [url] = images.as_slice() {
-        let dest = out_dir.join(format!("{stem}.jpg"));
-        emit_progress(app, JOB, Some(0.0), Some("Downloading the photo…"));
-        download_file(&client, url, &dest, token, |f| {
-            emit_progress(app, JOB, Some(f), Some("Downloading the photo…"))
-        })
-        .await?;
-        return Ok(Some(dest));
-    }
-    build_photo_slideshow(app, state, token, &client, stem, &images, None, out_dir, stem)
+    let single = post.images.len() == 1;
+    let sound = post.music.as_ref().map(|m| Sound {
+        url: &m.url,
+        start: m.start,
+        length: m.length,
+    });
+    let had_music = sound.is_some();
+    if had_music || !single {
+        // A single photo only becomes a video when its music can be had.
+        match build_photo_slideshow(
+            app,
+            state,
+            token,
+            &client,
+            stem,
+            &post.images,
+            sound,
+            single,
+            out_dir,
+            stem,
+        )
         .await
-        .map(Some)
+        {
+            Ok(path) => {
+                let note = (!had_music && opts.cookies_browser.is_none()).then(|| NO_LOGIN_HINT.to_string());
+                return Ok(Some((path, note)));
+            }
+            Err(e) if e == NO_SOUND => {}
+            Err(e) => return Err(e),
+        }
+    }
+
+    // One picture and no music to go with it: a photo, which the editor opens.
+    let Some(url) = post.images.first() else {
+        return Ok(None);
+    };
+    let dest = out_dir.join(format!("{stem}.jpg"));
+    emit_progress(app, JOB, Some(0.0), Some("Downloading the photo…"));
+    download_file(&client, url, &dest, token, |f| {
+        emit_progress(app, JOB, Some(f), Some("Downloading the photo…"))
+    })
+    .await?;
+    let note = if had_music {
+        Some(MUSIC_FAILED.to_string())
+    } else if opts.cookies_browser.is_none() {
+        Some(NO_LOGIN_HINT.to_string())
+    } else {
+        None
+    };
+    Ok(Some((dest, note)))
+}
+
+/// Ask yt-dlp what is in the post. It also saves the answers it got from Instagram, which
+/// is where the music is; they go in `work` and are read before returning.
+async fn look_up_photo_post(
+    token: &CancellationToken,
+    program: &Path,
+    opts: &DownloadOptions,
+    work: &Path,
+) -> Result<Option<PhotoPost>, String> {
+    let mut cmd = Command::new(program);
+    bins::hide_window(&mut cmd);
+    cmd.args(build_info_args(opts))
+        .current_dir(work)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let output = tokio::select! {
+        _ = token.cancelled() => return Err(CANCELLED.into()),
+        o = cmd.output() => o,
+    };
+    // If this second look fails too, yt-dlp's first answer ("no video") is the useful one.
+    let Ok(output) = output else { return Ok(None) };
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let Some(images) = parse_photo_post(&String::from_utf8_lossy(&output.stdout)) else {
+        return Ok(None);
+    };
+    Ok(Some(PhotoPost {
+        images,
+        music: read_post_music(work),
+    }))
+}
+
+/// The music in any of the answers yt-dlp saved from Instagram.
+fn read_post_music(dir: &Path) -> Option<PostMusic> {
+    const MAX_PAGE_BYTES: u64 = 16 * 1024 * 1024;
+    std::fs::read_dir(dir).ok()?.flatten().find_map(|entry| {
+        let path = entry.path();
+        let is_page = path.extension().is_some_and(|e| e == "dump");
+        if !is_page || entry.metadata().ok()?.len() > MAX_PAGE_BYTES {
+            return None;
+        }
+        parse_post_music(&std::fs::read_to_string(path).ok()?)
+    })
 }
 
 // ───────────────────────────── TikTok ─────────────────────────────
@@ -286,7 +384,8 @@ async fn download_tiktok<R: Runtime>(
                 &client,
                 &id,
                 &images,
-                music.as_deref(),
+                music.as_deref().map(Sound::whole),
+                false,
                 out_dir,
                 stem,
             )
@@ -301,7 +400,7 @@ async fn download_tiktok<R: Runtime>(
     emit_progress(app, JOB, None, Some("Trying the backup downloader…"));
     download_with_ytdlp(app, state, token, &canonical, Platform::TikTok, out_dir, stem)
         .await
-        .map(|p| (p, None))
+        .map(|(path, _)| (path, None))
 }
 
 async fn resolve_short_link(client: &reqwest::Client, url: &str) -> Result<String, String> {
@@ -411,6 +510,65 @@ async fn audio_length(path: &str) -> Option<f64> {
     .ok()
 }
 
+/// A post's sound and the stretch of it to use.
+struct Sound<'a> {
+    url: &'a str,
+    /// Seconds into the track where the post starts playing it.
+    start: f64,
+    /// How many seconds of it the post plays; `None` for all the rest.
+    length: Option<f64>,
+}
+
+impl<'a> Sound<'a> {
+    fn whole(url: &'a str) -> Self {
+        Sound {
+            url,
+            start: 0.0,
+            length: None,
+        }
+    }
+}
+
+/// What `build_photo_slideshow` fails with when the sound was required and can't be had.
+const NO_SOUND: &str = "the sound of the post could not be downloaded";
+
+/// Download a post's sound into `dir`, cut to the stretch the post plays. `None` when it
+/// can't be had: the sound is nice to have, a missing track shouldn't fail the post.
+async fn fetch_sound(
+    client: &reqwest::Client,
+    sound: &Sound<'_>,
+    dir: &Path,
+    token: &CancellationToken,
+) -> Result<Option<String>, String> {
+    let full = dir.join("music.mp3");
+    match download_file(client, sound.url, &full, token, |_| {}).await {
+        Ok(()) => {}
+        Err(e) if e == CANCELLED => return Err(e),
+        Err(_) => return Ok(None),
+    }
+    let full = full.to_string_lossy().into_owned();
+    if sound.start <= 0.0 && sound.length.is_none() {
+        return Ok(Some(full));
+    }
+
+    let cut = dir.join("music-cut.m4a").to_string_lossy().into_owned();
+    let (start, length) = (
+        format!("{:.3}", sound.start),
+        sound.length.map(|l| format!("{l:.3}")),
+    );
+    let mut args = vec!["-hide_banner", "-nostdin", "-y", "-ss", &start];
+    if let Some(length) = &length {
+        args.extend(["-t", length]);
+    }
+    args.extend(["-i", &full, "-vn", "-c:a", "aac", "-b:a", "192k", &cut]);
+    let _ = jobs::capture_stderr(&bins::ffmpeg(), &args).await;
+    // Nothing usable (e.g. the start is past the end of the track): use the whole track.
+    Ok(Some(match audio_length(&cut).await {
+        Some(seconds) if seconds > 0.1 => cut,
+        _ => full,
+    }))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn build_photo_slideshow<R: Runtime>(
     app: &AppHandle<R>,
@@ -419,7 +577,8 @@ async fn build_photo_slideshow<R: Runtime>(
     client: &reqwest::Client,
     id: &str,
     images: &[String],
-    music: Option<&str>,
+    music: Option<Sound<'_>>,
+    require_sound: bool,
     out_dir: &Path,
     stem: &str,
 ) -> Result<PathBuf, String> {
@@ -451,16 +610,17 @@ async fn build_photo_slideshow<R: Runtime>(
         local_images.push(dest.to_string_lossy().into_owned());
     }
     let mut local_audio = None;
-    if let Some(url) = music {
-        let dest = work.join("music.mp3");
-        // The sound is nice to have; a missing track shouldn't fail the post.
-        match download_file(client, url, &dest, token, |_| {}).await {
-            Ok(()) => local_audio = Some(dest.to_string_lossy().into_owned()),
-            Err(e) if e == CANCELLED => {
+    if let Some(sound) = &music {
+        match fetch_sound(client, sound, &work, token).await {
+            Ok(path) => local_audio = path,
+            Err(e) => {
                 let _ = std::fs::remove_dir_all(&work);
                 return Err(e);
             }
-            Err(_) => {}
+        }
+        if local_audio.is_none() && require_sound {
+            let _ = std::fs::remove_dir_all(&work);
+            return Err(NO_SOUND.into());
         }
     }
 

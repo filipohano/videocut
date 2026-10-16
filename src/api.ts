@@ -90,6 +90,8 @@ export interface DownloadResult {
   path: string;
   platform: Platform;
   title: string | null;
+  /** Something worth telling the user about how the download went (e.g. music left out). */
+  note: string | null;
 }
 
 export interface ExportSpec {

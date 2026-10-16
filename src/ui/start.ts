@@ -50,9 +50,11 @@ export function initStart(openVideo: (path: string) => Promise<boolean>): void {
     store.setBusy(true);
     progress.classList.remove("hidden");
     let downloaded: string | null = null;
+    let note: string | null = null;
     try {
       const result = await withProgress("download", bar, label, () => api.downloadLink(text), "Looking up the post…");
       downloaded = result.path;
+      note = result.note;
       input.value = "";
       badge.classList.add("hidden");
     } catch (err) {
@@ -64,5 +66,6 @@ export function initStart(openVideo: (path: string) => Promise<boolean>): void {
     }
     // The busy flag has to be cleared first: opening a video refuses to run while busy.
     if (downloaded) await openVideo(downloaded);
+    if (downloaded && note) toast(note, { kind: "info", timeout: 15000 });
   });
 }

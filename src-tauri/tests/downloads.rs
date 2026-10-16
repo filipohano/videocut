@@ -114,6 +114,9 @@ for a in "$@"; do
   if [ "$a" = "--dump-single-json" ]; then
     # The "what is in this post?" lookup, kept apart from the download call.
     printf '%s\n' "$@" > "$here/info-args.txt"
+    # --write-pages: the answers Instagram gave, saved in the current folder.
+    echo '<html>logged-out web page</html>' > "./IG_p_C1.dump"
+    [ -f "$here/music.json" ] && cp "$here/music.json" "./IG_api_v1_media_1_info_.dump"
     [ -f "$here/info.json" ] && { cat "$here/info.json"; exit 0; }
     echo "ERROR: nothing known about this post" >&2; exit 1
   fi
@@ -380,6 +383,175 @@ fn instagram_photo_post_is_downloaded_as_a_photo_to_edit() {
     assert_eq!(info[i + 1], "chrome");
     assert!(info.contains(&"--no-download".to_string()));
     assert_eq!(info.last().unwrap(), "https://www.instagram.com/p/C1a2B3c4D5e/");
+}
+
+/// What Instagram's logged-in answer looks like for a photo post with music.
+fn music_answer(url: &str, consumption: Value) -> String {
+    json!({ "items": [{ "media_type": 1, "music_metadata": { "music_info": {
+        "music_asset_info": { "title": "Song", "progressive_download_url": url },
+        "music_consumption_info": consumption,
+    }}}]})
+    .to_string()
+}
+
+fn instagram_photo_post(bin: &Path, photos: usize, music: Option<String>) {
+    let host = &fixture().host;
+    std::fs::write(
+        bin.join("fail.txt"),
+        "ERROR: [Instagram] C1a2: There is no video in this post\n",
+    )
+    .unwrap();
+    std::fs::write(bin.join("info.json"), photo_post_info(host, photos)).unwrap();
+    if let Some(answer) = music {
+        std::fs::write(bin.join("music.json"), answer).unwrap();
+    }
+}
+
+fn no_scratch_left(h: &Harness) {
+    let cache = h.dir.path().join("cache");
+    assert!(
+        std::fs::read_dir(&cache).unwrap().flatten().all(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            !n.starts_with("instagram-") && !n.starts_with("slideshow-")
+        }),
+        "scratch folders are cleaned up"
+    );
+}
+
+#[test]
+fn instagram_photo_with_music_becomes_a_video_of_the_picture_and_the_music() {
+    let Some(h) = harness() else { return };
+    let host = fixture().host.clone();
+    let dir = set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    let mut s = call(&h.win, "get_settings", json!({})).unwrap();
+    s["cookiesBrowser"] = json!("chrome");
+    call(&h.win, "save_settings", json!({ "settings": s })).unwrap();
+    // The post plays 1 s of the track, starting half a second in.
+    let answer = music_answer(
+        &format!("{host}/music.aac"),
+        json!({ "audio_asset_start_time_in_ms": 500, "overlap_duration_in_ms": 1000 }),
+    );
+    instagram_photo_post(&bin, 1, Some(answer));
+
+    let res = call(
+        &h.win,
+        "download_link",
+        json!({ "url": "https://www.instagram.com/p/C1a2B3c4D5e/" }),
+    )
+    .unwrap();
+    let path = res["path"].as_str().unwrap();
+    assert_timestamp_named(path, &dir);
+    assert!(res["note"].is_null(), "nothing to apologise for: {res}");
+    let (w, hgt, dur) = dims(path);
+    assert_eq!((w, hgt), (1080, 1920));
+    assert!(
+        (dur - 1.0).abs() < 0.3,
+        "as long as the stretch the post plays, got {dur}"
+    );
+    let probe = call(&h.win, "probe_media", json!({ "path": path })).unwrap();
+    assert_eq!(probe["hasAudio"], true);
+    assert_eq!(probe["isImage"], false);
+    no_scratch_left(&h);
+}
+
+#[test]
+fn without_a_stated_stretch_the_whole_track_is_used() {
+    let Some(h) = harness() else { return };
+    let host = fixture().host.clone();
+    set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    // A start past the end of the 2 s track is nonsense: fall back to all of it.
+    for consumption in [
+        json!({}),
+        json!({ "audio_asset_start_time_in_ms": 90000, "overlap_duration_in_ms": 5000 }),
+    ] {
+        let answer = music_answer(&format!("{host}/music.aac"), consumption);
+        instagram_photo_post(&bin, 1, Some(answer));
+        let res = call(
+            &h.win,
+            "download_link",
+            json!({ "url": "https://www.instagram.com/p/C1a2B3c4D5e/" }),
+        )
+        .unwrap();
+        let (_, _, dur) = dims(res["path"].as_str().unwrap());
+        assert!((dur - 2.0).abs() < 0.4, "got {dur}");
+    }
+}
+
+#[test]
+fn instagram_carousel_with_music_keeps_three_seconds_per_photo() {
+    let Some(h) = harness() else { return };
+    let host = fixture().host.clone();
+    set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    instagram_photo_post(
+        &bin,
+        3,
+        Some(music_answer(&format!("{host}/music.aac"), json!({}))),
+    );
+    let res = call(
+        &h.win,
+        "download_link",
+        json!({ "url": "https://www.instagram.com/p/C1a2B3c4D5e/" }),
+    )
+    .unwrap();
+    let path = res["path"].as_str().unwrap();
+    let (_, _, dur) = dims(path);
+    assert!((dur - 9.0).abs() < 0.3, "got {dur}");
+    let probe = call(&h.win, "probe_media", json!({ "path": path })).unwrap();
+    assert_eq!(probe["hasAudio"], true);
+    no_scratch_left(&h);
+}
+
+#[test]
+fn a_single_photo_whose_music_cannot_be_fetched_is_still_a_photo() {
+    let Some(h) = harness() else { return };
+    let host = fixture().host.clone();
+    let dir = set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    let mut s = call(&h.win, "get_settings", json!({})).unwrap();
+    s["cookiesBrowser"] = json!("chrome");
+    call(&h.win, "save_settings", json!({ "settings": s })).unwrap();
+    instagram_photo_post(
+        &bin,
+        1,
+        Some(music_answer(&format!("{host}/gone.aac"), json!({}))),
+    );
+    let res = call(
+        &h.win,
+        "download_link",
+        json!({ "url": "https://www.instagram.com/p/C1a2B3c4D5e/" }),
+    )
+    .unwrap();
+    let path = res["path"].as_str().unwrap();
+    assert!(
+        path.ends_with(".jpg") && Path::new(path).starts_with(&dir),
+        "{path}"
+    );
+    assert!(res["note"].as_str().unwrap().contains("music"), "{res}");
+    no_scratch_left(&h);
+}
+
+#[test]
+fn without_a_login_the_user_is_told_how_to_get_the_music() {
+    let Some(h) = harness() else { return };
+    set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    // No browser chosen and the answer Instagram gives anonymously has no music.
+    instagram_photo_post(&bin, 1, None);
+    let res = call(
+        &h.win,
+        "download_link",
+        json!({ "url": "https://www.instagram.com/p/C1a2B3c4D5e/" }),
+    )
+    .unwrap();
+    assert!(res["path"].as_str().unwrap().ends_with(".jpg"));
+    let note = res["note"].as_str().unwrap();
+    assert!(note.contains("Settings") && note.contains("music"), "{note}");
+    let info = std::fs::read_to_string(bin.join("info-args.txt")).unwrap();
+    assert!(info.contains("--write-pages"), "{info}");
+    no_scratch_left(&h);
 }
 
 #[test]
