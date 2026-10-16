@@ -15,8 +15,8 @@ pub mod watermark;
 pub mod ytdlp;
 
 pub use export::{
-    build_export_args, build_preview_args, build_slideshow_args, ContentBox, CropRect, Encoder, ExportError,
-    ExportSpec, ImageFormat, SlideshowSpec, WatermarkPlacement,
+    build_export_args, build_preview_args, build_slideshow_args, slideshow_seconds_per_image, ContentBox,
+    CropRect, Encoder, ExportError, ExportSpec, ImageFormat, SlideshowSpec, WatermarkPlacement,
 };
 pub use history::{HistoryEntry, HistoryKind, HistoryStore, NewEntry};
 pub use links::{parse_link, LinkError, ParsedLink, Platform};

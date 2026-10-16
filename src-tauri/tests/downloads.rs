@@ -18,6 +18,7 @@ use tauri::Listener;
 
 const VIDEO_ID: &str = "1111111111111111111";
 const PHOTO_ID: &str = "2222222222222222222";
+const SINGLE_ID: &str = "4444444444444444444";
 const ERROR_ID: &str = "3333333333333333333";
 
 struct Fixture {
@@ -71,6 +72,10 @@ fn serve(mut s: std::net::TcpStream, video: &[u8], imgs: &[Vec<u8>], music: &[u8
     let (status, ctype, body): (&str, &str, Vec<u8>) = if target.starts_with("/api/") {
         let json = if target.contains(VIDEO_ID) {
             json!({"code":0,"data":{"id":VIDEO_ID,"title":"A video","hdplay":format!("{base}/video.mp4"),"play":format!("{base}/video.mp4")}})
+        } else if target.contains(SINGLE_ID) {
+            json!({"code":0,"data":{"id":SINGLE_ID,"title":"One photo",
+                "images":[format!("{base}/img0.png")],
+                "music":format!("{base}/music.aac")}})
         } else if target.contains(PHOTO_ID) {
             json!({"code":0,"data":{"id":PHOTO_ID,"title":"Photos",
                 "images":[format!("{base}/img0.png"),format!("{base}/img1.png"),format!("{base}/img2.png")],
@@ -224,6 +229,27 @@ fn tiktok_photo_post_becomes_a_portrait_slideshow_with_sound() {
         .unwrap()
         .flatten()
         .all(|e| !e.file_name().to_string_lossy().contains("partial")));
+}
+
+#[test]
+fn one_photo_with_music_becomes_a_video_as_long_as_the_music() {
+    let Some(h) = harness() else { return };
+    fixture();
+    let dir = set_download_dir(&h);
+
+    let url = format!("https://www.tiktok.com/@someone/photo/{SINGLE_ID}");
+    let res = call(&h.win, "download_link", json!({ "url": url })).unwrap();
+    let path = res["path"].as_str().unwrap();
+    assert_timestamp_named(path, &dir);
+    assert!(path.ends_with(".mp4"), "it stays a video file");
+
+    // The fixture's music is 2 s long (not the usual 3 s per photo).
+    let (w, hgt, dur) = dims(path);
+    assert_eq!((w, hgt), (1080, 1920));
+    assert!((dur - 2.0).abs() < 0.3, "follows the music, got {dur}");
+    let probe = call(&h.win, "probe_media", json!({ "path": path })).unwrap();
+    assert_eq!(probe["isImage"], false);
+    assert_eq!(probe["hasAudio"], true);
 }
 
 #[test]

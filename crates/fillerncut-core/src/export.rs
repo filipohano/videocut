@@ -625,6 +625,20 @@ pub struct SlideshowSpec {
 pub const SLIDESHOW_WIDTH: u32 = 1080;
 pub const SLIDESHOW_HEIGHT: u32 = 1920;
 
+/// How long each photo of a photo post is shown.
+pub const SLIDESHOW_SECONDS_PER_IMAGE: f64 = 3.0;
+/// A single photo with music lasts as long as the music, but never longer than this.
+pub const SLIDESHOW_MAX_SINGLE_SECONDS: f64 = 60.0;
+
+/// Seconds per photo. A post with several photos shows each for a few seconds; a post
+/// with ONE photo and a sound is a "picture with music", so the video follows the music.
+pub fn slideshow_seconds_per_image(images: usize, audio_seconds: Option<f64>) -> f64 {
+    match audio_seconds {
+        Some(d) if images == 1 && d.is_finite() && d > 0.0 => d.clamp(1.0, SLIDESHOW_MAX_SINGLE_SECONDS),
+        _ => SLIDESHOW_SECONDS_PER_IMAGE,
+    }
+}
+
 pub fn slideshow_duration(spec: &SlideshowSpec) -> f64 {
     spec.images.len() as f64 * spec.seconds_per_image
 }
@@ -1168,6 +1182,30 @@ mod tests {
         assert_eq!(arg_after(&nv, "-rc"), "vbr");
         let amf = build_export_args(&sp, Encoder::Amf).unwrap();
         assert_eq!(arg_after(&amf, "-rc"), "vbr_peak");
+    }
+
+    #[test]
+    fn one_photo_with_music_lasts_as_long_as_the_music() {
+        assert_eq!(slideshow_seconds_per_image(1, Some(27.4)), 27.4);
+        assert_eq!(
+            slideshow_seconds_per_image(1, Some(600.0)),
+            SLIDESHOW_MAX_SINGLE_SECONDS
+        );
+        assert_eq!(slideshow_seconds_per_image(1, Some(0.2)), 1.0);
+        // Several photos, no music, or an unreadable length: the usual pace.
+        assert_eq!(
+            slideshow_seconds_per_image(3, Some(27.4)),
+            SLIDESHOW_SECONDS_PER_IMAGE
+        );
+        assert_eq!(slideshow_seconds_per_image(1, None), SLIDESHOW_SECONDS_PER_IMAGE);
+        assert_eq!(
+            slideshow_seconds_per_image(1, Some(f64::NAN)),
+            SLIDESHOW_SECONDS_PER_IMAGE
+        );
+        assert_eq!(
+            slideshow_seconds_per_image(1, Some(0.0)),
+            SLIDESHOW_SECONDS_PER_IMAGE
+        );
     }
 
     #[test]

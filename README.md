@@ -4,7 +4,7 @@ Download, crop, trim and watermark videos on your Mac or Windows PC — everythi
 
 - **Downloader** for **TikTok**, **Instagram** and **X/Twitter** links. TikTok comes in source quality
   *without* the watermark (full links, `vt.tiktok.com` share links, or just the 19-digit post id), and TikTok
-  **photo posts** are built into a 1080×1920 video with their sound.
+  **photo posts** are built into a 1080×1920 video with their sound (3 s per photo; a single photo with music lasts as long as the music, up to 60 s).
 - **Photos too**: open a JPG, PNG or WebP and crop it, add watermarks and text, and export as JPG (with a quality
   slider) or PNG (lossless, keeps transparency). Phone photos that are stored sideways are handled.
 - **Editor** with a large live preview: drag-to-crop with aspect-ratio presets, trim in/out, and an exact

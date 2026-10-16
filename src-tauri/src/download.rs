@@ -4,7 +4,9 @@
 //! * TikTok goes through a watermark-free API first (original quality, and the
 //!   only way to get photo posts), falling back to yt-dlp for plain videos.
 
-use fillerncut_core::export::{build_slideshow_args, slideshow_duration, SlideshowSpec};
+use fillerncut_core::export::{
+    build_slideshow_args, slideshow_duration, slideshow_seconds_per_image, SlideshowSpec,
+};
 use fillerncut_core::links::{parse_link, tiktok_id_from_resolved, ParsedLink, Platform};
 use fillerncut_core::tiktok::{api_query_url, parse_response, TikTokError, TikTokMedia, API_HOST};
 use fillerncut_core::ytdlp::{build_args, explain_error, parse_line, DownloadOptions, YtDlpLine};
@@ -25,8 +27,6 @@ use crate::state::AppState;
 
 const JOB: &str = "download";
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
-/// How long each photo of a TikTok photo post is shown.
-const SECONDS_PER_PHOTO: f64 = 3.0;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -339,6 +339,27 @@ async fn download_file(
     result
 }
 
+/// Length of an audio file in seconds, if ffprobe can tell.
+async fn audio_length(path: &str) -> Option<f64> {
+    jobs::capture(
+        &bins::ffprobe(),
+        &[
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+            path,
+        ],
+    )
+    .await
+    .ok()?
+    .trim()
+    .parse()
+    .ok()
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn build_photo_slideshow<R: Runtime>(
     app: &AppHandle<R>,
@@ -392,13 +413,20 @@ async fn build_photo_slideshow<R: Runtime>(
         }
     }
 
+    // One photo + music is a "picture with a sound": make the video as long as the music.
+    let audio_seconds = match &local_audio {
+        Some(a) if local_images.len() == 1 => audio_length(a).await,
+        _ => None,
+    };
+
+    let seconds_per_image = slideshow_seconds_per_image(local_images.len(), audio_seconds);
     let dest = out_dir.join(format!("{stem}.mp4"));
     let partial = out_dir.join(format!("{stem}.partial.mp4"));
     let spec = SlideshowSpec {
         images: local_images,
         audio: local_audio,
         output: partial.to_string_lossy().into_owned(),
-        seconds_per_image: SECONDS_PER_PHOTO,
+        seconds_per_image,
     };
     let encoder = pick_encoder(state).await?;
     let args = build_slideshow_args(&spec, encoder).map_err(|e| e.to_string())?;
