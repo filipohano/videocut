@@ -100,8 +100,8 @@ They appear in the queue on the start screen; tap one to download it and open it
   reads it straight away and restarts the 30 minutes. A refresh follows the channel back through the newest
   posts (up to about 100) until it reaches ones it has already seen.
 - **What stays.** A link stays in the queue until you open it or press ×, and it never comes back after that. Posting
-  the same link again is a new post and is queued again. When you first connect, the channel's latest ~20 posts
-  are picked up.
+  the same link again is a new post and is queued again. When you first connect, the channel's 50 newest
+  posts are picked up.
 - **Why the channel has to be public.** FillernCut reads Telegram's public web view of the channel
   (`t.me/s/<name>`) directly from your computer, with no bot, no account and no server in between. Telegram doesn't
   show private channels there. It also means anyone who knows the name can read the channel, so pick a name nobody

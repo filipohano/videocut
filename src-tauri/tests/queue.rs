@@ -10,7 +10,8 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Mutex, OnceLock};
 
-/// How many posts a page holds. Telegram's is about 20; a small number shows the paging.
+/// How many posts a page holds unless a test says otherwise. Telegram's is about 20; a small
+/// number shows the paging.
 const PAGE_SIZE: usize = 5;
 
 const REEL: &str = "https://www.instagram.com/reel/C1a2B3c4D5e/";
@@ -21,6 +22,8 @@ const TWEET: &str = "https://x.com/jack/status/20";
 struct Channel {
     /// (post number, message text as HTML)
     posts: Vec<(i64, String)>,
+    /// Posts per page; 0 means `PAGE_SIZE`.
+    page_size: usize,
     requests: usize,
     /// Answer with this status instead of the page.
     status: Option<u16>,
@@ -91,7 +94,8 @@ fn serve(mut stream: std::net::TcpStream, server: &Server) {
                     .filter(|(id, _)| before.is_none_or(|b| *id < b))
                     .collect();
                 shown.sort_by_key(|(id, _)| *id);
-                let start = shown.len().saturating_sub(PAGE_SIZE);
+                let size = if c.page_size == 0 { PAGE_SIZE } else { c.page_size };
+                let start = shown.len().saturating_sub(size);
                 let page = &shown[start..];
                 let more = page
                     .first()
@@ -245,15 +249,45 @@ fn a_refresh_never_reads_more_than_five_pages() {
 }
 
 #[test]
-fn connecting_to_an_old_channel_reads_its_latest_page_only() {
+fn connecting_to_an_old_channel_picks_up_its_newest_posts_only() {
     let Some(h) = harness() else { return };
     server();
     let name = "old_channel";
+    // 40 posts, five to a page: three pages are read, so the newest 15.
     open_channel(name, (1..=40).map(|n| (n, link(&tweet(n)))).collect());
     let result = set(&h, name).unwrap();
-    assert_eq!(result["added"], PAGE_SIZE as i64);
-    assert_eq!(requests(name), 1);
-    assert_eq!(urls(&result["view"]), (36..=40).map(tweet).collect::<Vec<_>>());
+    assert_eq!(requests(name), 3);
+    assert_eq!(urls(&result["view"]), (26..=40).map(tweet).collect::<Vec<_>>());
+    // What is older than that is skipped for good, not trickled in later.
+    post_link(name, 41, &tweet(41));
+    let later = call(&h.win, "queue_refresh", json!({})).unwrap();
+    assert_eq!(later["added"], 1);
+    assert_eq!(urls(&later["view"]).len(), 16);
+}
+
+#[test]
+fn the_first_look_keeps_the_newest_fifty_of_what_it_read() {
+    let Some(h) = harness() else { return };
+    server();
+    let name = "long_history";
+    // Pages of 20 like Telegram's: three pages are 60 posts, and the newest 50 are kept.
+    open_channel(name, (1..=200).map(|n| (n, link(&tweet(n)))).collect());
+    server().channels.lock().unwrap().get_mut(name).unwrap().page_size = 20;
+    let result = set(&h, name).unwrap();
+    assert_eq!(requests(name), 3);
+    assert_eq!(result["added"], 50);
+    assert_eq!(urls(&result["view"]), (151..=200).map(tweet).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_short_channel_is_read_to_its_first_post() {
+    let Some(h) = harness() else { return };
+    server();
+    let name = "short_channel";
+    open_channel(name, (1..=12).map(|n| (n, link(&tweet(n)))).collect());
+    let result = set(&h, name).unwrap();
+    assert_eq!(result["added"], 12);
+    assert_eq!(requests(name), 3, "5 + 5 + 2 posts, and it stops at post 1");
 }
 
 #[test]

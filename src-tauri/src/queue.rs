@@ -14,6 +14,11 @@ const JOB: &str = "queue";
 /// A page holds the newest ~20 posts. A refresh reads back until it reaches posts it has
 /// already seen, but never more than this many pages, however long the app was closed.
 const MAX_PAGES: usize = 5;
+/// The first time a channel is read, this many of its newest posts are picked up (so a
+/// channel with a long history doesn't fill the queue with old links)...
+const FIRST_LOOK_POSTS: usize = 50;
+/// ...which takes this many pages.
+const FIRST_LOOK_PAGES: usize = 3;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,6 +101,14 @@ async fn fetch_posts(channel: &str, already_read: i64, pages: usize) -> Result<V
     Ok(posts)
 }
 
+/// The `count` newest posts.
+fn newest(mut posts: Vec<ChannelPost>, count: usize) -> Vec<ChannelPost> {
+    posts.sort_by_key(|p| p.id);
+    posts.dedup_by_key(|p| p.id);
+    let skip = posts.len().saturating_sub(count);
+    posts.split_off(skip)
+}
+
 /// What is in the queue now, from disk. No network.
 #[tauri::command]
 pub fn queue_get(state: State<'_, AppState>) -> QueueView {
@@ -109,14 +122,18 @@ pub async fn queue_set_channel(state: State<'_, AppState>, input: String) -> Res
     let Ok(_guard) = state.begin_job(JOB) else {
         return Err("The queue is being updated. Try again in a moment.".into());
     };
-    // Looking at a channel for the first time reads its latest page only.
+    // Looking at a channel for the first time picks up its newest posts only.
     let first_look = state.queue.snapshot().channel.as_deref() != Some(channel.as_str());
     let already_read = if first_look {
         0
     } else {
         state.queue.snapshot().seen_up_to()
     };
-    let posts = fetch_posts(&channel, already_read, if first_look { 1 } else { MAX_PAGES }).await?;
+    let pages = if first_look { FIRST_LOOK_PAGES } else { MAX_PAGES };
+    let mut posts = fetch_posts(&channel, already_read, pages).await?;
+    if first_look {
+        posts = newest(posts, FIRST_LOOK_POSTS);
+    }
     let added = state
         .queue
         .update(|q| {
@@ -147,8 +164,12 @@ pub async fn queue_refresh(state: State<'_, AppState>) -> Result<RefreshResult, 
             added: 0,
         });
     };
-    let pages = if snapshot.first_look() { 1 } else { MAX_PAGES };
-    let posts = fetch_posts(&channel, snapshot.seen_up_to(), pages).await?;
+    let first_look = snapshot.first_look();
+    let pages = if first_look { FIRST_LOOK_PAGES } else { MAX_PAGES };
+    let mut posts = fetch_posts(&channel, snapshot.seen_up_to(), pages).await?;
+    if first_look {
+        posts = newest(posts, FIRST_LOOK_POSTS);
+    }
     let added = state
         .queue
         .update(|q| {
