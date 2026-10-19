@@ -9,11 +9,11 @@ Download, crop, trim and watermark videos on your Mac or Windows PC — everythi
   song the post plays (3 s per photo, or as long as the music for a single photo); without music a single photo opens
   as a photo to edit and a carousel becomes a silent video. Instagram only hands out the music to a logged-in
   browser (see below).
-- **Telegram queue.** Send TikTok, Instagram or X links to a Telegram bot from your phone and they wait in a
-  queue on the start screen: one tap opens one for editing. The app fetches the queue at launch and then every
-  30 minutes while it's open (**Refresh** fetches at once). Each person connects their own Telegram chat with a
-  one-time code, so your links only ever reach your copy of the app. Needs a small server you set up once, see
-  [queue-worker/](queue-worker/README.md).
+- **Telegram queue.** Share TikTok, Instagram and X links from your phone to a Telegram channel of your own, and
+  they wait in a queue on the start screen: one tap opens one for editing. The app reads the channel when it
+  launches and every 30 minutes while it's open (**Refresh** reads it at once and starts the 30 minutes over).
+  Everyone uses their own channel, so your links only ever reach your own copy of the app. No bot and no
+  server, see [Telegram queue](#telegram-queue).
 - **Photos too**: open a JPG, PNG or WebP and crop it, add watermarks and text, and export as JPG (with a quality
   slider) or PNG (lossless, keeps transparency). Phone photos that are stored sideways are handled.
 - **Editor** with a large live preview: drag-to-crop with aspect-ratio presets, trim in/out, and an exact
@@ -84,14 +84,32 @@ refreshed in the background at launch (toggle in Settings → Downloads), becaus
 
 ## Telegram queue
 
-The queue server (a free Cloudflare Worker, set up once) and the bot are described in
-[queue-worker/README.md](queue-worker/README.md). Once it is online, give the address to the app either by
-adding the repository variable `FILLERNCUT_QUEUE_URL` (releases then have it built in) or in
-*Settings → Telegram queue*. Then, in the app, **Telegram queue → Connect Telegram** links a chat.
+Collect links on your phone and open them on your computer, without copying anything between the two.
 
-- Links you send are kept on the server only until the app has picked them up (at most 30 days).
-- The server knows the links, the Telegram first name and chat id of connected chats, and a hash of
-  each copy of the app's secret.
+**Set it up once (2 minutes):**
+
+1. In Telegram, create a channel (*New Channel*) and make it **Public** with a username of your own, for example
+   `my_links` (*Channel settings → Channel type → Public*).
+2. In FillernCut, under **Telegram queue**, type that username and press **Save**.
+3. On your phone, share TikTok, Instagram and X links to the channel (*Share → Telegram → your channel*, or just
+   paste them there).
+
+They appear in the queue on the start screen; tap one to download it and open it in the editor.
+
+- **When it updates.** The channel is read at launch and then every 30 minutes while the app is open. **Refresh**
+  reads it straight away and restarts the 30 minutes. A refresh follows the channel back through the newest
+  posts (up to about 100) until it reaches ones it has already seen.
+- **What stays.** A link stays in the queue until you open it or press ×, and it never comes back after that. Posting
+  the same link again is a new post and is queued again. When you first connect, the channel's latest ~20 posts
+  are picked up.
+- **Why the channel has to be public.** FillernCut reads Telegram's public web view of the channel
+  (`t.me/s/<name>`) directly from your computer, with no bot, no account and no server in between. Telegram doesn't
+  show private channels there. It also means anyone who knows the name can read the channel, so pick a name nobody
+  would guess and only post links there. Only a channel's admins can post in it, so nobody else can fill your queue.
+- **Everyone has their own queue.** Each person types their own channel, so a link posted to yours never reaches
+  anyone else's copy of the app. (Two people who type the same channel share it.)
+- **If it stops filling.** The web view is Telegram's, not a documented interface. If Telegram changes it, update
+  FillernCut; the queue then keeps working again.
 
 ## Development
 

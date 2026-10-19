@@ -1,6 +1,6 @@
-/** The Telegram queue on the start screen: links sent to the bot wait here, one tap opens them. */
+/** The Telegram queue on the start screen: links posted to your own Telegram channel wait here, one tap opens them. */
 import { ask } from "@tauri-apps/plugin-dialog";
-import { api, errorMessage, type PairInfo, type QueueItem, type QueueView } from "../api";
+import { api, errorMessage, type QueueItem, type QueueView } from "../api";
 import { RefreshTimer, shortLink, timeAgo } from "../lib/queue";
 import { store } from "../store";
 import { $, h } from "./dom";
@@ -13,16 +13,21 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 export function initQueue(fetchLink: (url: string) => Promise<boolean>): void {
   const card = $("#queue-card");
-  const dialog = $<HTMLDialogElement>("#queue-dialog");
   let view: QueueView | null = null;
   /** Why the last refresh failed, if it did. */
   let failure: string | null = null;
   let refreshing = false;
+  /** The channel form is showing although a channel is already set ("Change"). */
+  let changing = false;
+  let saving = false;
+  let formError: string | null = null;
+  let typed = "";
 
   const timer = new RefreshTimer(() => refresh(true));
 
   /** Fetch new links. `auto` is the 30-minute / launch refresh: quiet unless something arrives. */
   async function refresh(auto: boolean): Promise<void> {
+    if (!view?.channel) return; // nothing to read yet
     refreshing = true;
     render();
     try {
@@ -37,6 +42,33 @@ export function initQueue(fetchLink: (url: string) => Promise<boolean>): void {
       if (!auto) toast(failure, { kind: "error" });
     } finally {
       refreshing = false;
+      render();
+    }
+  }
+
+  async function saveChannel(): Promise<void> {
+    if (saving) return;
+    saving = true;
+    formError = null;
+    render();
+    try {
+      const result = await api.queueSetChannel(typed);
+      view = result.view;
+      failure = null;
+      changing = false;
+      typed = "";
+      toast(
+        result.added > 0
+          ? `Found ${plural(result.added, "link", "links")} in t.me/${result.view.channel}`
+          : `Reading t.me/${result.view.channel}. Links you post there show up here.`,
+        { kind: "success" },
+      );
+      // The channel was just read, so the next automatic refresh is a full period away.
+      void timer.runNow(async () => {});
+    } catch (e) {
+      formError = errorMessage(e);
+    } finally {
+      saving = false;
       render();
     }
   }
@@ -64,7 +96,7 @@ export function initQueue(fetchLink: (url: string) => Promise<boolean>): void {
   }
 
   async function disconnect(): Promise<void> {
-    const sure = await ask("Disconnect Telegram? Links still waiting in the queue are removed.", {
+    const sure = await ask("Stop reading the channel? Links still waiting in the queue are removed. The channel itself isn't touched.", {
       title: "Disconnect Telegram",
       kind: "warning",
     });
@@ -72,96 +104,10 @@ export function initQueue(fetchLink: (url: string) => Promise<boolean>): void {
     try {
       view = await api.queueDisconnect();
       failure = null;
+      changing = false;
       render();
     } catch (e) {
       toast(errorMessage(e), { kind: "error" });
-    }
-  }
-
-  // ───────── connecting a chat ─────────
-  async function connect(): Promise<void> {
-    try {
-      showPairing(await api.queuePair());
-    } catch (e) {
-      toast(errorMessage(e), { kind: "error" });
-    }
-  }
-
-  function showPairing(pair: PairInfo): void {
-    // A chat counts as new if it was linked after this dialog opened.
-    const baseline = Math.max(0, ...(view?.linked ?? []).map((c) => c.linkedAt));
-    let poll: ReturnType<typeof setInterval> | undefined;
-    const stop = () => clearInterval(poll);
-
-    const status = h("p", { class: "muted small", role: "status" }, "Waiting for you to press Start in Telegram…");
-    const again = h("button", { class: "btn small hidden", onclick: () => { dialog.close(); void connect(); } }, "Get a new code");
-
-    const check = async () => {
-      if (Date.now() / 1000 > pair.expiresAt) {
-        stop();
-        status.textContent = "This code has expired.";
-        again.classList.remove("hidden");
-        return;
-      }
-      try {
-        const result = await api.queueRefresh();
-        view = result.view;
-        render();
-        const fresh = result.view.linked.filter((c) => c.linkedAt > baseline);
-        if (fresh.length > 0) {
-          stop();
-          status.textContent = `Connected as ${fresh.map((c) => c.label).join(", ")} ✓`;
-          toast("Telegram connected. Send links to the bot and they show up here.", { kind: "success" });
-          setTimeout(() => dialog.close(), 1200);
-        }
-      } catch {
-        // Offline for a moment: try again on the next tick.
-      }
-    };
-
-    dialog.replaceChildren(
-      h("div", { class: "dialog-head" }, h("h2", {}, "Connect Telegram"), h("button", { class: "icon-btn", "aria-label": "Close", onclick: () => dialog.close() }, "×")),
-      h(
-        "div",
-        { class: "dialog-body" },
-        h(
-          "section",
-          { class: "set-section" },
-          h("p", { style: { margin: "0" } }, h("strong", {}, "1. "), "Open the bot in Telegram"),
-          h(
-            "div",
-            { class: "set-row" },
-            h("button", { class: "btn primary", onclick: () => void api.openUrl(pair.link).catch((e) => toast(errorMessage(e), { kind: "error" })) }, "Open Telegram"),
-            h("button", { class: "btn small", onclick: () => void copy(pair.link, "Link copied") }, "Copy link"),
-          ),
-          h("p", { style: { margin: "0" } }, h("strong", {}, "2. "), "Press ", h("strong", {}, "Start"), " in the chat that opens"),
-          status,
-          again,
-        ),
-        h(
-          "section",
-          { class: "set-section" },
-          h("p", { class: "muted small", style: { margin: "0" } }, `Telegram not opening? Send this message to @${pair.bot} yourself:`),
-          h("code", { class: "queue-code" }, `/start ${pair.code}`),
-          h(
-            "p",
-            { class: "muted small", style: { margin: "0" } },
-            "Only this chat is connected to this copy of FillernCut: links sent from other chats never land here, and yours never land in anyone else's. The code works once and expires after 10 minutes.",
-          ),
-        ),
-      ),
-    );
-    dialog.addEventListener("close", stop, { once: true });
-    dialog.showModal();
-    poll = setInterval(() => void check(), 3000);
-  }
-
-  async function copy(text: string, done: string): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(text);
-      toast(done, { kind: "success", timeout: 2500 });
-    } catch {
-      toast(text, { kind: "info" });
     }
   }
 
@@ -181,65 +127,103 @@ export function initQueue(fetchLink: (url: string) => Promise<boolean>): void {
     );
   }
 
+  function channelForm(v: QueueView): HTMLElement[] {
+    const input = h("input", {
+      type: "text",
+      spellcheck: false,
+      autocapitalize: "off",
+      autocorrect: "off",
+      placeholder: "@my_links",
+      "aria-label": "Telegram channel name",
+      value: typed,
+      disabled: saving,
+      oninput: (e: Event) => (typed = (e.target as HTMLInputElement).value),
+    }) as HTMLInputElement;
+    const form = h(
+      "form",
+      { class: "queue-form", autocomplete: "off" },
+      input,
+      h("button", { class: "btn primary", type: "submit", disabled: saving }, saving ? "Checking…" : "Save"),
+      v.channel &&
+        h("button", { class: "btn", type: "button", disabled: saving, onclick: () => { changing = false; formError = null; typed = ""; render(); } }, "Cancel"),
+    );
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      void saveChannel();
+    });
+    return [
+      h(
+        "ol",
+        { class: "queue-steps muted small" },
+        h("li", {}, "In Telegram, create a channel and make it ", h("strong", {}, "Public"), " with a username (Channel settings → Channel type)."),
+        h("li", {}, "Type that username here."),
+        h("li", {}, "From your phone, share TikTok, Instagram and X links to the channel. They wait here: tap one to open it."),
+      ),
+      form,
+      formError && h("p", { class: "small status-err queue-error", role: "alert" }, formError),
+      h(
+        "p",
+        { class: "muted small queue-error" },
+        "A public channel can be read by anyone who knows its name. Pick a name nobody would guess, and only post links there. FillernCut reads it straight from your computer: no other server is involved.",
+      ),
+    ].filter(Boolean) as HTMLElement[];
+  }
+
   function render(): void {
     if (!view) return;
     const v = view;
-    const linked = v.linked.length > 0;
     const parts: (HTMLElement | false)[] = [];
+    const showForm = !v.channel || changing;
 
     const status = failure
       ? h("span", { class: "small status-warn", title: failure }, "Couldn't refresh")
       : v.lastRefreshed
         ? h("span", { class: "small muted" }, `Updated ${new Date(v.lastRefreshed * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`)
         : null;
-    const canRefresh = v.configured && v.connected;
     parts.push(
       h(
         "div",
         { class: "queue-head" },
         h("h2", { class: "section-title" }, "Telegram queue"),
         h("span", { class: "grow" }),
-        status,
-        canRefresh &&
+        v.channel && !showForm && status,
+        v.channel &&
+          !showForm &&
           h("button", { class: "btn small", disabled: refreshing || store.busy, onclick: () => void timer.runNow(() => refresh(false)) }, refreshing ? "Refreshing…" : "Refresh"),
       ),
     );
 
-    if (!v.configured) {
-      parts.push(
-        h("p", { class: "muted small queue-note" }, "The Telegram queue isn't set up in this version of FillernCut. If you run the queue server yourself, add its address in Settings."),
-        h("div", {}, h("button", { class: "btn small", onclick: () => $("#btn-settings").click() }, "Open Settings")),
-      );
-    } else if (!linked) {
-      parts.push(
-        h(
-          "p",
-          { class: "muted small queue-note" },
-          v.connected
-            ? "Almost there: press Start in the Telegram chat, or get a new code."
-            : "Send TikTok, Instagram and X links to a Telegram bot from your phone, and they wait here. Tap one to open it.",
-        ),
-        h("div", {}, h("button", { class: "btn primary", onclick: () => void connect() }, "Connect Telegram")),
-      );
+    if (showForm) {
+      parts.push(...(channelForm(v) as HTMLElement[]));
     } else {
       parts.push(
         v.items.length > 0
           ? h("div", { class: "queue-list" }, ...v.items.map(row))
-          : h("p", { class: "muted small queue-note" }, "Nothing waiting. Send a link to the bot in Telegram and it shows up here."),
+          : h("p", { class: "muted small queue-note" }, "Nothing waiting. Post a link in your channel and it shows up here."),
+        failure ? h("p", { class: "small status-warn queue-note" }, failure) : false,
         h(
           "div",
           { class: "queue-foot" },
-          h("span", { class: "muted small grow" }, `Connected as ${v.linked.map((c) => c.label).join(", ")}`),
-          v.bot ? h("button", { class: "btn small", onclick: () => void api.openUrl(`https://t.me/${v.bot}`).catch(() => {}) }, "Open the bot") : null,
-          h("button", { class: "btn small", onclick: () => void connect() }, "Add a chat"),
+          h("span", { class: "muted small grow" }, `Reading t.me/${v.channel}`),
+          h("button", { class: "btn small", onclick: () => void api.openUrl(`https://t.me/${v.channel}`).catch(() => {}) }, "Open the channel"),
+          h("button", { class: "btn small", onclick: () => { changing = true; typed = v.channel ?? ""; formError = null; render(); } }, "Change"),
           h("button", { class: "btn small danger", onclick: () => void disconnect() }, "Disconnect"),
         ),
       );
     }
+    // A redraw (a refresh finishing, the busy flag) must not take the cursor from the channel field.
+    const before = card.querySelector<HTMLInputElement>(".queue-form input");
+    const typing = before !== null && document.activeElement === before;
+    const selection = typing ? [before.selectionStart, before.selectionEnd] : null;
     card.replaceChildren(...(parts.filter(Boolean) as HTMLElement[]));
+    const after = card.querySelector<HTMLInputElement>(".queue-form input");
+    if (after && selection) {
+      after.focus();
+      after.setSelectionRange(selection[0], selection[1]);
+    }
   }
 
-  // From disk straight away, then the network: at launch and every 30 minutes while the app is open.
+  // From disk straight away, then Telegram: at launch and every 30 minutes while the app is open.
   void api
     .queueGet()
     .then((v) => {
@@ -250,12 +234,6 @@ export function initQueue(fetchLink: (url: string) => Promise<boolean>): void {
     .finally(() => void timer.start());
 
   store.on("busy", render);
-  store.on("settings", () => {
-    void api.queueGet().then((v) => {
-      view = v;
-      render();
-    });
-  });
   // "5 min ago" stays right, and a refresh that was missed while the computer slept is made up for.
   setInterval(render, 60_000);
   window.addEventListener("focus", () => timer.catchUp());

@@ -1,27 +1,24 @@
-//! The Telegram link queue: links sent to the bot wait on a small server until the
-//! app picks them up. See `fillerncut_core::queue` and `queue-worker/`.
+//! The Telegram queue: the app reads a public Telegram channel of the user's own
+//! (`https://t.me/s/<name>`) and queues the TikTok/Instagram/X links posted there.
+//! See `fillerncut_core::queue`.
 
-use fillerncut_core::queue::{
-    resolve_server, Applied, LinkedChat, PairInfo, QueueItem, QueueState, RemoteQueue,
-};
-use reqwest::{Method, StatusCode};
+use fillerncut_core::queue::{parse_channel, parse_channel_page, ChannelPost, QueueItem};
 use serde::Serialize;
 use std::time::Duration;
 use tauri::State;
 
+use crate::download::USER_AGENT;
 use crate::state::AppState;
 
 const JOB: &str = "queue";
+/// A page holds the newest ~20 posts. A refresh reads back until it reaches posts it has
+/// already seen, but never more than this many pages, however long the app was closed.
+const MAX_PAGES: usize = 5;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueView {
-    /// A queue server is known (built in or typed in Settings).
-    configured: bool,
-    /// This installation has made its secret, i.e. the user has started connecting Telegram.
-    connected: bool,
-    bot: Option<String>,
-    linked: Vec<LinkedChat>,
+    channel: Option<String>,
     items: Vec<QueueItem>,
     last_refreshed: Option<i64>,
 }
@@ -30,18 +27,14 @@ pub struct QueueView {
 #[serde(rename_all = "camelCase")]
 pub struct RefreshResult {
     view: QueueView,
-    /// Links that were not in the queue before this refresh.
+    /// Links that were not in the queue before.
     added: usize,
 }
 
 fn view(state: &AppState) -> QueueView {
-    let settings = state.settings();
     let q = state.queue.snapshot();
     QueueView {
-        configured: resolve_server(settings.queue_server.as_deref()).is_ok(),
-        connected: q.token.is_some(),
-        bot: q.bot,
-        linked: q.linked,
+        channel: q.channel,
         items: q.items,
         last_refreshed: q.last_refreshed,
     }
@@ -54,50 +47,53 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-/// One call to the queue server as this installation.
-async fn call(
-    state: &AppState,
-    method: Method,
-    path: &str,
-    token: &str,
-    body: Option<serde_json::Value>,
-) -> Result<String, String> {
-    let server = resolve_server(state.settings().queue_server.as_deref()).map_err(|e| e.to_string())?;
+/// Telegram's web address. Overridable so the integration tests can point it at a local server.
+fn telegram_host() -> String {
+    std::env::var("FILLERNCUT_TELEGRAM_HOST").unwrap_or_else(|_| "https://t.me".to_string())
+}
+
+/// The newest posts of a channel, reading back until `already_read` (or `pages` pages).
+async fn fetch_posts(channel: &str, already_read: i64, pages: usize) -> Result<Vec<ChannelPost>, String> {
     let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
-    let mut request = client
-        .request(method, format!("{server}{path}"))
-        .bearer_auth(token);
-    if let Some(body) = body {
-        request = request
-            .header("content-type", "application/json")
-            .body(body.to_string());
+    let mut posts = Vec::new();
+    let mut before: Option<i64> = None;
+    for _ in 0..pages {
+        let mut url = format!("{}/s/{channel}", telegram_host());
+        if let Some(before) = before {
+            url.push_str(&format!("?before={before}"));
+        }
+        let response = client.get(&url).send().await.map_err(|_| {
+            "Couldn't reach Telegram. Check your internet connection and try again.".to_string()
+        })?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("Telegram answered with an error ({}).", status.as_u16()));
+        }
+        let html = response
+            .text()
+            .await
+            .map_err(|_| "Telegram cut the connection. Try again.".to_string())?;
+        let page = parse_channel_page(&html);
+        let Some(oldest) = page.iter().map(|p| p.id).min() else {
+            if before.is_none() {
+                return Err(format!(
+                    "Couldn't read any posts from t.me/{channel}. The channel has to be public (it needs a username: Channel settings → Channel type → Public) and have at least one post."
+                ));
+            }
+            break;
+        };
+        posts.extend(page);
+        if oldest <= already_read + 1 || oldest <= 1 {
+            break;
+        }
+        before = Some(oldest);
     }
-    let response = request.send().await.map_err(|_| {
-        "Couldn't reach the queue server. Check your internet connection and try again.".to_string()
-    })?;
-    let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|_| "The queue server cut the connection.".to_string())?;
-    match status {
-        s if s.is_success() => Ok(text),
-        StatusCode::UNAUTHORIZED => Err(
-            "The queue server didn't accept this installation. Disconnect Telegram and connect again.".into(),
-        ),
-        s => Err(format!(
-            "The queue server answered with an error ({}).",
-            s.as_u16()
-        )),
-    }
-}
-
-fn unexpected() -> String {
-    "The queue server gave an answer FillernCut doesn't understand. Is the address right?".into()
+    Ok(posts)
 }
 
 /// What is in the queue now, from disk. No network.
@@ -106,11 +102,39 @@ pub fn queue_get(state: State<'_, AppState>) -> QueueView {
     view(&state)
 }
 
-/// Pick up new links from the server. Without a connection (the user hasn't connected
-/// Telegram yet) this does nothing.
+/// Read a channel and start using it. A channel that can't be read isn't saved.
+#[tauri::command]
+pub async fn queue_set_channel(state: State<'_, AppState>, input: String) -> Result<RefreshResult, String> {
+    let channel = parse_channel(&input).map_err(|e| e.to_string())?;
+    let Ok(_guard) = state.begin_job(JOB) else {
+        return Err("The queue is being updated. Try again in a moment.".into());
+    };
+    // Looking at a channel for the first time reads its latest page only.
+    let first_look = state.queue.snapshot().channel.as_deref() != Some(channel.as_str());
+    let already_read = if first_look {
+        0
+    } else {
+        state.queue.snapshot().seen_up_to()
+    };
+    let posts = fetch_posts(&channel, already_read, if first_look { 1 } else { MAX_PAGES }).await?;
+    let added = state
+        .queue
+        .update(|q| {
+            q.set_channel(&channel);
+            q.apply_posts(posts, now_unix())
+        })
+        .map_err(|e| format!("Couldn't save the queue: {e}"))?;
+    Ok(RefreshResult {
+        view: view(&state),
+        added,
+    })
+}
+
+/// Pick up the links posted since last time. Does nothing until a channel is set.
 #[tauri::command]
 pub async fn queue_refresh(state: State<'_, AppState>) -> Result<RefreshResult, String> {
-    let Some(token) = state.queue.snapshot().token else {
+    let snapshot = state.queue.snapshot();
+    let Some(channel) = snapshot.channel.clone() else {
         return Ok(RefreshResult {
             view: view(&state),
             added: 0,
@@ -123,41 +147,23 @@ pub async fn queue_refresh(state: State<'_, AppState>) -> Result<RefreshResult, 
             added: 0,
         });
     };
-
-    let text = call(&state, Method::GET, "/v1/queue", &token, None).await?;
-    let remote: RemoteQueue = serde_json::from_str(&text).map_err(|_| unexpected())?;
-    // Saved before the server is told, so a crash in between can't lose a link.
-    let Applied { added, acknowledge } = state
+    let pages = if snapshot.first_look() { 1 } else { MAX_PAGES };
+    let posts = fetch_posts(&channel, snapshot.seen_up_to(), pages).await?;
+    let added = state
         .queue
-        .update(|q| q.apply(remote, now_unix()))
+        .update(|q| {
+            // The channel may have been changed while this was fetching.
+            if q.channel.as_deref() == Some(channel.as_str()) {
+                q.apply_posts(posts, now_unix())
+            } else {
+                0
+            }
+        })
         .map_err(|e| format!("Couldn't save the queue: {e}"))?;
-    if !acknowledge.is_empty() {
-        // If this fails the links simply come again, and are recognised.
-        let _ = call(
-            &state,
-            Method::POST,
-            "/v1/ack",
-            &token,
-            Some(serde_json::json!({ "ids": acknowledge })),
-        )
-        .await;
-    }
     Ok(RefreshResult {
         view: view(&state),
         added,
     })
-}
-
-/// Start connecting a Telegram chat: a one-time code and the link that opens the bot with it.
-#[tauri::command]
-pub async fn queue_pair(state: State<'_, AppState>) -> Result<PairInfo, String> {
-    resolve_server(state.settings().queue_server.as_deref()).map_err(|e| e.to_string())?;
-    let token = state
-        .queue
-        .update(QueueState::ensure_token)
-        .map_err(|e| format!("Couldn't save the queue: {e}"))?;
-    let text = call(&state, Method::POST, "/v1/pair", &token, None).await?;
-    serde_json::from_str(&text).map_err(|_| unexpected())
 }
 
 /// Take a link out of the queue (it was opened, or dismissed).
@@ -170,16 +176,12 @@ pub fn queue_remove(state: State<'_, AppState>, id: i64) -> Result<QueueView, St
     Ok(view(&state))
 }
 
-/// Disconnect Telegram: the server forgets the chats and links, and this installation gets
-/// a new secret next time. Works offline too; then the server's copy simply expires.
+/// Stop reading the channel and forget its links. The channel itself isn't touched.
 #[tauri::command]
-pub async fn queue_disconnect(state: State<'_, AppState>) -> Result<QueueView, String> {
-    if let Some(token) = state.queue.snapshot().token {
-        let _ = call(&state, Method::POST, "/v1/unlink", &token, None).await;
-    }
+pub fn queue_disconnect(state: State<'_, AppState>) -> Result<QueueView, String> {
     state
         .queue
-        .update(QueueState::disconnect)
+        .update(|q| q.disconnect())
         .map_err(|e| format!("Couldn't save the queue: {e}"))?;
     Ok(view(&state))
 }

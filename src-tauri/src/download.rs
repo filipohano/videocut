@@ -31,7 +31,7 @@ use crate::jobs::{self, collect_tail, emit_progress, CANCELLED};
 use crate::state::AppState;
 
 const JOB: &str = "download";
-const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
+pub(crate) const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

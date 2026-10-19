@@ -1417,10 +1417,21 @@ body.is-photo #panel-trim {
   gap: 8px;
   margin-top: 10px;
 }
-.queue-code {
-  display: block;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--field);
-  user-select: all;
+.queue-steps {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
+}
+.queue-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.queue-form input {
+  flex: 1;
+  min-width: 0;
+}
+.queue-error {
+  margin: 8px 0 0;
 }

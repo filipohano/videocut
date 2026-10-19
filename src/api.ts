@@ -74,8 +74,6 @@ export interface Settings {
   exportImageQuality: number;
   /** "auto" or an encoder id from `AppInfo.encoders`. */
   encoder: string;
-  /** Address of the Telegram queue server, for builds that don't have one built in. */
-  queueServer: string | null;
 }
 
 export interface AppInfo {
@@ -100,22 +98,13 @@ export interface QueueItem {
   id: number;
   url: string;
   platform: Platform;
-  /** Unix seconds */
+  /** When it was posted in the channel, Unix seconds */
   addedAt: number;
 }
 
-export interface LinkedChat {
-  label: string;
-  linkedAt: number;
-}
-
 export interface QueueView {
-  /** A queue server is known (built in, or typed in Settings). */
-  configured: boolean;
-  /** The user has started connecting Telegram. */
-  connected: boolean;
-  bot: string | null;
-  linked: LinkedChat[];
+  /** The Telegram channel being read, once one is set. */
+  channel: string | null;
   items: QueueItem[];
   /** Unix seconds */
   lastRefreshed: number | null;
@@ -125,15 +114,6 @@ export interface QueueRefresh {
   view: QueueView;
   /** Links that weren't in the queue before. */
   added: number;
-}
-
-export interface PairInfo {
-  code: string;
-  /** Opens the bot with the code, e.g. https://t.me/FillernBot?start=ABCD2345 */
-  link: string;
-  bot: string;
-  /** Unix seconds */
-  expiresAt: number;
 }
 
 export interface ExportSpec {
@@ -210,7 +190,7 @@ export const api = {
 
   queueGet: () => invoke<QueueView>("queue_get"),
   queueRefresh: () => invoke<QueueRefresh>("queue_refresh"),
-  queuePair: () => invoke<PairInfo>("queue_pair"),
+  queueSetChannel: (input: string) => invoke<QueueRefresh>("queue_set_channel", { input }),
   queueRemove: (id: number) => invoke<QueueView>("queue_remove", { id }),
   queueDisconnect: () => invoke<QueueView>("queue_disconnect"),
 

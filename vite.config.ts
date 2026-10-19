@@ -5,5 +5,5 @@ export default defineConfig({
   clearScreen: false,
   server: { port: 1420, strictPort: true, watch: { ignored: ["**/src-tauri/**", "**/crates/**"] } },
   build: { target: "safari15", outDir: "dist", emptyOutDir: true },
-  test: { include: ["src/**/*.test.ts", "queue-worker/test/**/*.test.ts"] },
+  test: { include: ["src/**/*.test.ts"] },
 });

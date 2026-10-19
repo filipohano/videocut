@@ -6,9 +6,8 @@
  * Sample media comes from `npm run dev:assets` (needs ffmpeg).
  * Query flags:  ?update=1  pretend a newer release exists
  *               ?mode=notify|manual  start with that update mode
- *               ?queue=off|items|empty  Telegram queue: no server, connected with
- *                 links, connected and empty (default: configured, not connected;
- *                 connecting "succeeds" a few seconds after the code is shown)
+ *               ?queue=items|empty  Telegram queue: a channel with links, or an empty
+ *                 one (default: no channel yet; "my_links" works, "private_one" fails)
  */
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
@@ -38,7 +37,6 @@ let settings: Settings = {
   exportQuality: 60,
   exportImageQuality: 90,
   encoder: "auto",
-  queueServer: null,
 };
 
 const entry = (id: string, name: string, file: string, aspect: number, nx: number, ny: number, scale: number, opacity: number, content = { l: 0, t: 0, r: 1, b: 1 }): WatermarkEntry => ({
@@ -64,16 +62,12 @@ const sampleItems = [
   { id: 2, url: "https://www.tiktok.com/@someone/video/7123456789012345678", platform: "tiktok", addedAt: nowSeconds() - 3 * 3600 },
   { id: 3, url: "https://x.com/jack/status/20", platform: "twitter", addedAt: nowSeconds() - 30 * 3600 },
 ];
-const connectedAtStart = queueMode === "items" || queueMode === "empty";
+const hasChannel = queueMode === "items" || queueMode === "empty";
 let queue = {
-  configured: queueMode !== "off",
-  connected: connectedAtStart,
-  bot: connectedAtStart ? "FillernBot" : null,
-  linked: connectedAtStart ? [{ label: "Filip", linkedAt: nowSeconds() - 86400 }] : [],
+  channel: hasChannel ? "my_links" : (null as string | null),
   items: queueMode === "items" ? sampleItems : [],
   lastRefreshed: null as number | null,
 };
-let pairedAt = 0;
 
 const cancelled = new Set<string>();
 
@@ -167,20 +161,21 @@ mockIPC(
       case "queue_get":
         return queue;
       case "queue_refresh":
-        // Pretend the user pressed Start in Telegram a few seconds after the code appeared.
-        if (pairedAt && queue.linked.length === 0 && Date.now() - pairedAt > 4000) queue = { ...queue, linked: [{ label: "Filip", linkedAt: nowSeconds() }] };
-        if (queue.connected) queue = { ...queue, lastRefreshed: nowSeconds() };
+        if (queue.channel) queue = { ...queue, lastRefreshed: nowSeconds() };
         return { view: queue, added: 0 };
-      case "queue_pair":
-        pairedAt = Date.now();
-        queue = { ...queue, connected: true, bot: "FillernBot" };
-        return { code: "K7Q9XM2P", link: "https://t.me/FillernBot?start=K7Q9XM2P", bot: "FillernBot", expiresAt: nowSeconds() + 600 };
+      case "queue_set_channel": {
+        await sleep(600);
+        const name = String(a.input).trim().replace(/^@|^https?:\/\/t\.me\//, "");
+        if (!/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(name)) throw "That isn't a Telegram channel name. It should look like @my_links or https://t.me/my_links (5–32 letters, digits or underscores).";
+        if (name === "private_one") throw `Couldn't read any posts from t.me/${name}. The channel has to be public (it needs a username: Channel settings → Channel type → Public) and have at least one post.`;
+        queue = { channel: name, items: sampleItems.slice(0, 2), lastRefreshed: nowSeconds() };
+        return { view: queue, added: 2 };
+      }
       case "queue_remove":
         queue = { ...queue, items: queue.items.filter((i) => i.id !== a.id) };
         return queue;
       case "queue_disconnect":
-        queue = { ...queue, connected: false, bot: null, linked: [], items: [], lastRefreshed: null };
-        pairedAt = 0;
+        queue = { channel: null, items: [], lastRefreshed: null };
         return queue;
       case "history_list":
         return history;

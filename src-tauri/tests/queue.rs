@@ -1,5 +1,5 @@
-//! The Telegram queue commands end to end against a local stand-in for the queue server,
-//! which (like the real one) keeps a separate queue for every secret token it is given.
+//! The Telegram queue commands end to end against a local stand-in for `t.me/s/<channel>`
+//! (`FILLERNCUT_TELEGRAM_HOST`). Every test uses a channel of its own on the one shared server.
 
 mod common;
 
@@ -8,395 +8,398 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::sync::{Arc, Mutex};
+use std::sync::{Mutex, OnceLock};
 
-#[derive(Default)]
-struct Server {
-    /// token → links waiting for that installation.
-    queues: HashMap<String, Vec<(i64, String)>>,
-    next_id: i64,
-    /// Every call as "METHOD /path".
-    calls: Vec<String>,
-    tokens_seen: Vec<String>,
-    acknowledged: Vec<i64>,
-    /// Keep sending acknowledged items again, as if the acknowledgement never arrived.
-    forget_acks: bool,
-    /// Answer everything with this status.
-    status: Option<u16>,
-    garbage: bool,
-}
-
-type Shared = Arc<Mutex<Server>>;
-
-impl Server {
-    fn send(&mut self, token: &str, url: &str) {
-        self.next_id += 1;
-        let id = self.next_id;
-        self.queues
-            .entry(token.to_string())
-            .or_default()
-            .push((id, url.to_string()));
-    }
-}
-
-fn spawn_server() -> (String, Shared) {
-    let shared: Shared = Arc::new(Mutex::new(Server::default()));
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = format!("http://{}", listener.local_addr().unwrap());
-    let state = shared.clone();
-    std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let state = state.clone();
-            std::thread::spawn(move || serve(stream, state));
-        }
-    });
-    (address, shared)
-}
-
-fn serve(mut stream: std::net::TcpStream, state: Shared) {
-    let mut raw = Vec::new();
-    let mut buf = [0u8; 4096];
-    let (head, mut body) = loop {
-        let n = stream.read(&mut buf).unwrap_or(0);
-        if n == 0 {
-            return;
-        }
-        raw.extend_from_slice(&buf[..n]);
-        if let Some(end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
-            break (
-                String::from_utf8_lossy(&raw[..end]).into_owned(),
-                raw[end + 4..].to_vec(),
-            );
-        }
-    };
-    let length = head
-        .lines()
-        .find_map(|l| {
-            l.to_ascii_lowercase()
-                .strip_prefix("content-length:")
-                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
-        })
-        .unwrap_or(0);
-    while body.len() < length {
-        let n = stream.read(&mut buf).unwrap_or(0);
-        if n == 0 {
-            break;
-        }
-        body.extend_from_slice(&buf[..n]);
-    }
-    let mut first = head.lines().next().unwrap_or("").split_whitespace();
-    let (method, path) = (first.next().unwrap_or(""), first.next().unwrap_or(""));
-    let token = head
-        .lines()
-        .find_map(|l| {
-            l.strip_prefix("authorization: Bearer ")
-                .or_else(|| l.strip_prefix("Authorization: Bearer "))
-        })
-        .unwrap_or("")
-        .trim()
-        .to_string();
-
-    let mut s = state.lock().unwrap();
-    s.calls.push(format!("{method} {path}"));
-    s.tokens_seen.push(token.clone());
-    let (status, text) = if let Some(code) = s.status {
-        (code, json!({ "ok": false }).to_string())
-    } else if s.garbage {
-        (200, "<html>not the queue</html>".to_string())
-    } else if token.len() < 32 {
-        (
-            401,
-            json!({ "ok": false, "error": "missing or invalid token" }).to_string(),
-        )
-    } else {
-        match (method, path) {
-            ("GET", "/v1/queue") => {
-                let items: Vec<Value> = s
-                    .queues
-                    .get(&token)
-                    .map(|q| {
-                        q.iter()
-                            .map(|(id, url)| json!({ "id": id, "url": url, "at": 1_800_000_000 + id }))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let linked = if s.queues.contains_key(&token) {
-                    json!([{ "label": "Filip", "linkedAt": 1_800_000_000 }])
-                } else {
-                    json!([])
-                };
-                (
-                    200,
-                    json!({ "ok": true, "bot": "FillernBot", "linked": linked, "items": items }).to_string(),
-                )
-            }
-            ("POST", "/v1/ack") => {
-                let ids: Vec<i64> = serde_json::from_slice::<Value>(&body)
-                    .ok()
-                    .and_then(|v| v["ids"].as_array().cloned())
-                    .map(|a| a.iter().filter_map(Value::as_i64).collect())
-                    .unwrap_or_default();
-                s.acknowledged.extend(&ids);
-                if !s.forget_acks {
-                    if let Some(q) = s.queues.get_mut(&token) {
-                        q.retain(|(id, _)| !ids.contains(id));
-                    }
-                }
-                (200, json!({ "ok": true, "removed": ids.len() }).to_string())
-            }
-            ("POST", "/v1/pair") => {
-                s.queues.entry(token.clone()).or_default();
-                (
-                    200,
-                    json!({ "ok": true, "bot": "FillernBot", "code": "ABCD2345",
-                        "link": "https://t.me/FillernBot?start=ABCD2345", "expiresAt": 1_800_000_600 })
-                    .to_string(),
-                )
-            }
-            ("POST", "/v1/unlink") => {
-                s.queues.remove(&token);
-                (200, json!({ "ok": true }).to_string())
-            }
-            _ => (404, json!({ "ok": false }).to_string()),
-        }
-    };
-    drop(s);
-    let _ = write!(
-        stream,
-        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
-        text.len()
-    );
-}
-
-fn use_server(h: &Harness, address: &str) {
-    let mut s = call(&h.win, "get_settings", json!({})).unwrap();
-    s["queueServer"] = json!(address);
-    call(&h.win, "save_settings", json!({ "settings": s })).unwrap();
-}
+/// How many posts a page holds. Telegram's is about 20; a small number shows the paging.
+const PAGE_SIZE: usize = 5;
 
 const REEL: &str = "https://www.instagram.com/reel/C1a2B3c4D5e/";
 const TIKTOK: &str = "https://www.tiktok.com/@someone/video/7123456789012345678";
+const TWEET: &str = "https://x.com/jack/status/20";
 
-fn token_of(h: &Harness) -> String {
-    let file = std::fs::read_to_string(h.dir.path().join("data/queue.json")).unwrap();
-    serde_json::from_str::<Value>(&file).unwrap()["token"]
-        .as_str()
+#[derive(Default)]
+struct Channel {
+    /// (post number, message text as HTML)
+    posts: Vec<(i64, String)>,
+    requests: usize,
+    /// Answer with this status instead of the page.
+    status: Option<u16>,
+    /// Hang up without answering.
+    hang_up: bool,
+}
+
+struct Server {
+    channels: Mutex<HashMap<String, Channel>>,
+}
+
+fn server() -> &'static Server {
+    static S: OnceLock<&'static Server> = OnceLock::new();
+    S.get_or_init(|| {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let host = format!("http://{}", listener.local_addr().unwrap());
+        let server: &'static Server = Box::leak(Box::new(Server {
+            channels: Mutex::new(HashMap::new()),
+        }));
+        std::env::set_var("FILLERNCUT_TELEGRAM_HOST", &host);
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                std::thread::spawn(move || serve(stream, server));
+            }
+        });
+        server
+    })
+}
+
+fn message(id: i64, name: &str, body: &str) -> String {
+    format!(
+        r#"<div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message text_not_supported_wrap js-widget_message" data-post="{name}/{id}" data-view="abc">
+  <div class="tgme_widget_message_bubble"><div class="tgme_widget_message_text js-message_text" dir="auto">{body}</div>
+  <div class="tgme_widget_message_footer"><a class="tgme_widget_message_date" href="https://t.me/{name}/{id}"><time datetime="2026-01-02T03:{:02}:00+00:00" class="time">08:00</time></a></div></div></div></div>"#,
+        id % 60
+    )
+}
+
+fn link(url: &str) -> String {
+    format!(
+        r#"<a href="{url}" target="_blank" rel="noopener" onclick="return confirm('Open this link?\n\n'+this.href);">{url}</a>"#
+    )
+}
+
+fn serve(mut stream: std::net::TcpStream, server: &Server) {
+    let mut buf = [0u8; 4096];
+    let n = stream.read(&mut buf).unwrap_or(0);
+    let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+    let target = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+    let (path, query) = target.split_once('?').unwrap_or((&target, ""));
+    let before: Option<i64> = query.strip_prefix("before=").and_then(|v| v.parse().ok());
+    let name = path.strip_prefix("/s/").unwrap_or("").to_string();
+
+    let mut channels = server.channels.lock().unwrap();
+    let (status, body) = match channels.get_mut(&name) {
+        Some(c) if c.hang_up => {
+            c.requests += 1;
+            return;
+        }
+        Some(c) => {
+            c.requests += 1;
+            if let Some(status) = c.status {
+                (status, "error".to_string())
+            } else {
+                let mut shown: Vec<&(i64, String)> = c
+                    .posts
+                    .iter()
+                    .filter(|(id, _)| before.is_none_or(|b| *id < b))
+                    .collect();
+                shown.sort_by_key(|(id, _)| *id);
+                let start = shown.len().saturating_sub(PAGE_SIZE);
+                let page = &shown[start..];
+                let more = page
+                    .first()
+                    .filter(|(id, _)| *id > 1)
+                    .map(|(id, _)| format!(r#"<a href="/s/{name}?before={id}" class="tme_messages_more js-messages_more" data-before="{id}"></a>"#))
+                    .unwrap_or_default();
+                let html: String = page.iter().map(|(id, body)| message(*id, &name, body)).collect();
+                (200, format!("<html><body><section class=\"tgme_channel_history\">{more}{html}</section></body></html>"))
+            }
+        }
+        // A channel that doesn't exist, or isn't public: Telegram shows a plain page without posts.
+        None => (
+            200,
+            r#"<html><body><div class="tgme_page_title">Some name</div></body></html>"#.to_string(),
+        ),
+    };
+    drop(channels);
+    let _ = write!(
+        stream,
+        "HTTP/1.1 {status} X\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+}
+
+/// Make (or reset) a channel and give it posts 1..=n, each with one link from `links`.
+fn open_channel(name: &str, posts: Vec<(i64, String)>) {
+    server().channels.lock().unwrap().insert(
+        name.to_string(),
+        Channel {
+            posts,
+            ..Channel::default()
+        },
+    );
+}
+
+fn post_link(name: &str, id: i64, url: &str) {
+    server()
+        .channels
+        .lock()
         .unwrap()
-        .to_string()
+        .get_mut(name)
+        .unwrap()
+        .posts
+        .push((id, link(url)));
+}
+
+fn requests(name: &str) -> usize {
+    server().channels.lock().unwrap()[name].requests
+}
+
+/// A distinct link per number, so every post can be told apart.
+fn tweet(n: i64) -> String {
+    format!("https://x.com/user/status/{n}")
+}
+
+fn urls(view: &Value) -> Vec<String> {
+    view["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["url"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn set(h: &Harness, channel: &str) -> Result<Value, Value> {
+    call(&h.win, "queue_set_channel", json!({ "input": channel }))
 }
 
 #[test]
-fn without_a_server_the_queue_explains_what_is_missing() {
+fn a_new_queue_is_empty_and_not_connected() {
     let Some(h) = harness() else { return };
-    if fillerncut_core::queue::built_in_server().is_some() {
-        return; // this build has one built in
-    }
     let view = call(&h.win, "queue_get", json!({})).unwrap();
-    assert_eq!(view["configured"], false);
-    assert_eq!(view["connected"], false);
-    let err = call(&h.win, "queue_pair", json!({})).unwrap_err();
-    assert!(err.as_str().unwrap().contains("Settings"), "{err}");
-    // Nothing to fetch yet, and no complaint about it.
+    assert!(view["channel"].is_null());
+    assert_eq!(view["items"].as_array().unwrap().len(), 0);
+    // Refreshing without a channel is not an error: there is just nothing to read.
     let refreshed = call(&h.win, "queue_refresh", json!({})).unwrap();
     assert_eq!(refreshed["added"], 0);
 }
 
 #[test]
-fn the_server_address_is_a_setting_and_must_be_sound() {
+fn a_channel_is_read_and_its_links_queued_in_the_order_they_were_posted() {
     let Some(h) = harness() else { return };
-    let (address, _) = spawn_server();
-    use_server(&h, &format!("  {address}/ "));
-    let saved = call(&h.win, "get_settings", json!({})).unwrap();
-    assert_eq!(saved["queueServer"], address.as_str(), "trimmed");
-    assert_eq!(call(&h.win, "queue_get", json!({})).unwrap()["configured"], true);
+    server();
+    open_channel(
+        "inorder_links",
+        vec![
+            (1, link(REEL)),
+            (2, "just a note".into()),
+            (3, format!("see {} and {}", link(TIKTOK), link(TWEET))),
+        ],
+    );
 
-    use_server(&h, "http://not-local.example.dev");
-    assert_eq!(call(&h.win, "queue_get", json!({})).unwrap()["configured"], false);
-    let err = call(&h.win, "queue_pair", json!({})).unwrap_err();
-    assert!(err.as_str().unwrap().contains("address"), "{err}");
-    use_server(&h, "   ");
-    assert!(call(&h.win, "get_settings", json!({})).unwrap()["queueServer"].is_null());
+    let result = set(&h, "https://t.me/inorder_links").unwrap();
+    assert_eq!(result["added"], 3);
+    let view = &result["view"];
+    assert_eq!(view["channel"], "inorder_links");
+    assert_eq!(urls(view), vec![REEL, TIKTOK, TWEET]);
+    assert_eq!(view["items"][0]["platform"], "instagram");
+    assert_eq!(view["items"][1]["platform"], "tiktok");
+    assert_eq!(view["items"][2]["platform"], "twitter");
+    // Post 1 was posted 2026-01-02 03:01 UTC: the time of the post, not of the refresh.
+    assert_eq!(view["items"][0]["addedAt"], 1_767_322_860i64);
+    assert!(view["lastRefreshed"].as_i64().unwrap() > 1_700_000_000);
 }
 
 #[test]
-fn connecting_makes_a_secret_once_and_returns_the_link_for_the_bot() {
+fn only_new_posts_are_added_later_and_paging_follows_back_to_where_it_stopped() {
     let Some(h) = harness() else { return };
-    let (address, server) = spawn_server();
-    use_server(&h, &address);
+    server();
+    let name = "paging_links";
+    open_channel(name, (1..=3).map(|n| (n, link(&tweet(n)))).collect());
+    assert_eq!(set(&h, name).unwrap()["added"], 3);
+    assert_eq!(requests(name), 1);
 
-    let pair = call(&h.win, "queue_pair", json!({})).unwrap();
-    assert_eq!(pair["code"], "ABCD2345");
-    assert_eq!(pair["link"], "https://t.me/FillernBot?start=ABCD2345");
-    assert_eq!(pair["bot"], "FillernBot");
-    assert_eq!(call(&h.win, "queue_get", json!({})).unwrap()["connected"], true);
+    // Nothing new: one request, nothing added.
+    assert_eq!(call(&h.win, "queue_refresh", json!({})).unwrap()["added"], 0);
+    assert_eq!(requests(name), 2);
 
-    let token = token_of(&h);
-    assert_eq!(token.len(), 64);
-    call(&h.win, "queue_pair", json!({})).unwrap();
-    assert_eq!(token_of(&h), token, "the same secret is kept");
-    let s = server.lock().unwrap();
-    assert_eq!(s.calls, vec!["POST /v1/pair", "POST /v1/pair"]);
-    assert!(s.tokens_seen.iter().all(|t| *t == token));
-}
-
-#[test]
-fn refresh_picks_up_links_acknowledges_them_and_keeps_them() {
-    let Some(h) = harness() else { return };
-    let (address, server) = spawn_server();
-    use_server(&h, &address);
-    call(&h.win, "queue_pair", json!({})).unwrap();
-    let token = token_of(&h);
-    {
-        let mut s = server.lock().unwrap();
-        s.send(&token, REEL);
-        s.send(&token, TIKTOK);
+    // 12 new posts: three pages of five are needed to get back to post 3.
+    for n in 4..=15 {
+        post_link(name, n, &tweet(n));
     }
-
-    let first = call(&h.win, "queue_refresh", json!({})).unwrap();
-    assert_eq!(first["added"], 2);
-    let items = first["view"]["items"].as_array().unwrap();
-    assert_eq!(items.len(), 2);
-    assert_eq!(items[0]["url"], REEL);
-    assert_eq!(items[0]["platform"], "instagram");
-    assert_eq!(items[1]["platform"], "tiktok");
-    assert_eq!(first["view"]["linked"][0]["label"], "Filip");
-    assert!(first["view"]["lastRefreshed"].as_i64().unwrap() > 1_700_000_000);
-    assert_eq!(server.lock().unwrap().acknowledged, vec![1, 2]);
-
-    // Nothing new: nothing added, and the links are still there.
-    let second = call(&h.win, "queue_refresh", json!({})).unwrap();
-    assert_eq!(second["added"], 0);
-    assert_eq!(second["view"]["items"].as_array().unwrap().len(), 2);
-
-    // They're on disk, so a restart still has them.
-    let on_disk: Value =
-        serde_json::from_str(&std::fs::read_to_string(h.dir.path().join("data/queue.json")).unwrap())
-            .unwrap();
-    assert_eq!(on_disk["items"].as_array().unwrap().len(), 2);
-}
-
-#[test]
-fn a_link_the_user_dealt_with_does_not_come_back_when_an_acknowledgement_is_lost() {
-    let Some(h) = harness() else { return };
-    let (address, server) = spawn_server();
-    use_server(&h, &address);
-    call(&h.win, "queue_pair", json!({})).unwrap();
-    let token = token_of(&h);
-    {
-        let mut s = server.lock().unwrap();
-        s.forget_acks = true;
-        s.send(&token, REEL);
-    }
-    let first = call(&h.win, "queue_refresh", json!({})).unwrap();
-    let id = first["view"]["items"][0]["id"].as_i64().unwrap();
-    let removed = call(&h.win, "queue_remove", json!({ "id": id })).unwrap();
-    assert_eq!(removed["items"].as_array().unwrap().len(), 0);
-
-    // The server still holds it and sends it again.
-    let again = call(&h.win, "queue_refresh", json!({})).unwrap();
-    assert_eq!(again["added"], 0);
-    assert_eq!(again["view"]["items"].as_array().unwrap().len(), 0);
-}
-
-#[test]
-fn two_installations_never_see_each_others_links() {
-    let (Some(a), Some(b)) = (harness(), harness()) else {
-        return;
-    };
-    let (address, server) = spawn_server();
-    for app in [&a, &b] {
-        use_server(app, &address);
-        call(&app.win, "queue_pair", json!({})).unwrap();
-    }
-    let (ta, tb) = (token_of(&a), token_of(&b));
-    assert_ne!(ta, tb, "every installation has its own secret");
-    {
-        let mut s = server.lock().unwrap();
-        s.send(&ta, REEL);
-        s.send(&tb, TIKTOK);
-    }
-    let from_a = call(&a.win, "queue_refresh", json!({})).unwrap();
-    let from_b = call(&b.win, "queue_refresh", json!({})).unwrap();
-    assert_eq!(from_a["view"]["items"].as_array().unwrap().len(), 1);
-    assert_eq!(from_a["view"]["items"][0]["url"], REEL);
-    assert_eq!(from_b["view"]["items"].as_array().unwrap().len(), 1);
-    assert_eq!(from_b["view"]["items"][0]["url"], TIKTOK);
-}
-
-#[test]
-fn trouble_with_the_server_is_explained_and_never_loses_links() {
-    let Some(h) = harness() else { return };
-    let (address, server) = spawn_server();
-    use_server(&h, &address);
-    call(&h.win, "queue_pair", json!({})).unwrap();
-    let token = token_of(&h);
-    server.lock().unwrap().send(&token, REEL);
-    call(&h.win, "queue_refresh", json!({})).unwrap();
-
-    server.lock().unwrap().status = Some(401);
-    let err = call(&h.win, "queue_refresh", json!({})).unwrap_err();
-    assert!(err.as_str().unwrap().contains("Disconnect"), "{err}");
-    server.lock().unwrap().status = Some(500);
-    let err = call(&h.win, "queue_refresh", json!({})).unwrap_err();
-    assert!(err.as_str().unwrap().contains("500"), "{err}");
-    {
-        let mut s = server.lock().unwrap();
-        s.status = None;
-        s.garbage = true;
-    }
-    let err = call(&h.win, "queue_refresh", json!({})).unwrap_err();
-    assert!(err.as_str().unwrap().contains("address"), "{err}");
-
-    // A server that isn't there at all.
-    use_server(&h, "http://127.0.0.1:9");
-    let err = call(&h.win, "queue_refresh", json!({})).unwrap_err();
-    assert!(err.as_str().unwrap().contains("Couldn't reach"), "{err}");
-    let view = call(&h.win, "queue_get", json!({})).unwrap();
+    let refreshed = call(&h.win, "queue_refresh", json!({})).unwrap();
+    assert_eq!(refreshed["added"], 12);
+    assert_eq!(requests(name), 2 + 3);
+    let all = urls(&refreshed["view"]);
+    assert_eq!(all.len(), 15);
     assert_eq!(
-        view["items"].as_array().unwrap().len(),
-        1,
-        "what was already picked up stays"
+        all,
+        (1..=15).map(tweet).collect::<Vec<_>>(),
+        "in order and none twice"
     );
 }
 
 #[test]
-fn disconnecting_tells_the_server_and_starts_over_with_a_new_secret() {
+fn a_refresh_never_reads_more_than_five_pages() {
     let Some(h) = harness() else { return };
-    let (address, server) = spawn_server();
-    use_server(&h, &address);
-    call(&h.win, "queue_pair", json!({})).unwrap();
-    let old = token_of(&h);
-    server.lock().unwrap().send(&old, REEL);
-    call(&h.win, "queue_refresh", json!({})).unwrap();
-
-    let view = call(&h.win, "queue_disconnect", json!({})).unwrap();
-    assert_eq!(view["connected"], false);
-    assert_eq!(view["items"].as_array().unwrap().len(), 0);
-    assert!(server
-        .lock()
-        .unwrap()
-        .calls
-        .contains(&"POST /v1/unlink".to_string()));
-    assert!(!server.lock().unwrap().queues.contains_key(&old));
-
-    call(&h.win, "queue_pair", json!({})).unwrap();
-    assert_ne!(token_of(&h), old);
-
-    // Offline, disconnecting still works on this computer.
-    use_server(&h, "http://127.0.0.1:9");
-    let view = call(&h.win, "queue_disconnect", json!({})).unwrap();
-    assert_eq!(view["connected"], false);
+    server();
+    let name = "many_links";
+    open_channel(name, vec![(1, link(&tweet(1)))]);
+    set(&h, name).unwrap();
+    let before = requests(name);
+    for n in 2..=100 {
+        post_link(name, n, &tweet(n));
+    }
+    let refreshed = call(&h.win, "queue_refresh", json!({})).unwrap();
+    assert_eq!(requests(name) - before, 5);
+    // The newest 25 were read; the app doesn't go digging through all of history.
+    assert_eq!(refreshed["added"], 25);
+    assert_eq!(urls(&refreshed["view"]).last().unwrap(), &tweet(100));
 }
 
 #[test]
-fn only_the_telegram_bot_link_can_be_opened_besides_the_projects_pages() {
+fn connecting_to_an_old_channel_reads_its_latest_page_only() {
+    let Some(h) = harness() else { return };
+    server();
+    let name = "old_channel";
+    open_channel(name, (1..=40).map(|n| (n, link(&tweet(n)))).collect());
+    let result = set(&h, name).unwrap();
+    assert_eq!(result["added"], PAGE_SIZE as i64);
+    assert_eq!(requests(name), 1);
+    assert_eq!(urls(&result["view"]), (36..=40).map(tweet).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_link_that_was_opened_or_removed_does_not_come_back() {
+    let Some(h) = harness() else { return };
+    server();
+    let name = "removed_links";
+    open_channel(name, vec![(1, link(REEL)), (2, link(TIKTOK))]);
+    let view = set(&h, name).unwrap()["view"].clone();
+    let first = view["items"][0]["id"].as_i64().unwrap();
+    let after = call(&h.win, "queue_remove", json!({ "id": first })).unwrap();
+    assert_eq!(urls(&after), vec![TIKTOK]);
+
+    let refreshed = call(&h.win, "queue_refresh", json!({})).unwrap();
+    assert_eq!(refreshed["added"], 0);
+    assert_eq!(urls(&refreshed["view"]), vec![TIKTOK]);
+
+    // Posting the same link again is a new post, and queues it again.
+    post_link(name, 3, REEL);
+    let again = call(&h.win, "queue_refresh", json!({})).unwrap();
+    assert_eq!(again["added"], 1);
+    assert_eq!(urls(&again["view"]), vec![TIKTOK, REEL]);
+}
+
+#[test]
+fn a_channel_that_cannot_be_read_is_explained_and_not_saved() {
+    let Some(h) = harness() else { return };
+    server();
+    // Doesn't exist, or isn't public: Telegram shows no posts.
+    let err = set(&h, "@no_such_channel").unwrap_err();
+    assert!(err.as_str().unwrap().contains("public"), "{err}");
+    open_channel("empty_channel", vec![]);
+    assert!(
+        set(&h, "empty_channel").is_err(),
+        "a channel without posts can't be checked"
+    );
+    assert!(call(&h.win, "queue_get", json!({})).unwrap()["channel"].is_null());
+
+    // Names that aren't channels never reach the network.
+    for (input, word) in [
+        ("my channel", "isn't a Telegram channel"),
+        ("https://t.me/+AbCdEfGhIjK", "public"),
+        ("", "name of your Telegram channel"),
+    ] {
+        let err = set(&h, input).unwrap_err();
+        assert!(err.as_str().unwrap().contains(word), "{input:?}: {err}");
+    }
+}
+
+#[test]
+fn trouble_reaching_telegram_is_explained_and_loses_nothing() {
+    let Some(h) = harness() else { return };
+    server();
+    let name = "flaky_links";
+    open_channel(name, vec![(1, link(REEL))]);
+    set(&h, name).unwrap();
+    post_link(name, 2, TIKTOK);
+
+    server().channels.lock().unwrap().get_mut(name).unwrap().status = Some(503);
+    let err = call(&h.win, "queue_refresh", json!({})).unwrap_err();
+    assert!(err.as_str().unwrap().contains("503"), "{err}");
+    {
+        let mut channels = server().channels.lock().unwrap();
+        let c = channels.get_mut(name).unwrap();
+        c.status = None;
+        c.hang_up = true;
+    }
+    let err = call(&h.win, "queue_refresh", json!({})).unwrap_err();
+    assert!(err.as_str().unwrap().contains("Couldn't reach Telegram"), "{err}");
+    assert_eq!(
+        urls(&call(&h.win, "queue_get", json!({})).unwrap()),
+        vec![REEL],
+        "what was already there stays"
+    );
+
+    // Once it works again the missed post arrives.
+    server().channels.lock().unwrap().get_mut(name).unwrap().hang_up = false;
+    let refreshed = call(&h.win, "queue_refresh", json!({})).unwrap();
+    assert_eq!(refreshed["added"], 1);
+    assert_eq!(urls(&refreshed["view"]), vec![REEL, TIKTOK]);
+}
+
+#[test]
+fn two_people_only_ever_see_their_own_channel() {
+    let (Some(a), Some(b)) = (harness(), harness()) else {
+        return;
+    };
+    server();
+    open_channel("filips_links", vec![(1, link(REEL))]);
+    open_channel("maris_links", vec![(1, link(TIKTOK))]);
+    let from_a = set(&a, "@filips_links").unwrap();
+    let from_b = set(&b, "@maris_links").unwrap();
+    assert_eq!(urls(&from_a["view"]), vec![REEL]);
+    assert_eq!(urls(&from_b["view"]), vec![TIKTOK]);
+
+    post_link("filips_links", 2, TWEET);
+    assert_eq!(
+        urls(&call(&a.win, "queue_refresh", json!({})).unwrap()["view"]),
+        vec![REEL, TWEET]
+    );
+    assert_eq!(
+        urls(&call(&b.win, "queue_refresh", json!({})).unwrap()["view"]),
+        vec![TIKTOK]
+    );
+}
+
+#[test]
+fn changing_channel_starts_a_fresh_queue_and_disconnecting_forgets_everything() {
+    let Some(h) = harness() else { return };
+    server();
+    open_channel("first_channel", vec![(1, link(REEL))]);
+    open_channel("second_channel", vec![(1, link(TIKTOK))]);
+    set(&h, "first_channel").unwrap();
+    let changed = set(&h, "second_channel").unwrap();
+    assert_eq!(urls(&changed["view"]), vec![TIKTOK]);
+
+    let view = call(&h.win, "queue_disconnect", json!({})).unwrap();
+    assert!(view["channel"].is_null());
+    assert_eq!(view["items"].as_array().unwrap().len(), 0);
+    assert_eq!(call(&h.win, "queue_refresh", json!({})).unwrap()["added"], 0);
+    // Connecting to the same channel again starts over and finds its latest posts.
+    assert_eq!(set(&h, "second_channel").unwrap()["added"], 1);
+}
+
+#[test]
+fn the_queue_is_kept_on_disk_with_nothing_secret_in_it() {
+    let Some(h) = harness() else { return };
+    server();
+    open_channel("saved_links", vec![(1, link(REEL))]);
+    set(&h, "saved_links").unwrap();
+    let text = std::fs::read_to_string(h.dir.path().join("data/queue.json")).unwrap();
+    let saved: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(saved["channel"], "saved_links");
+    assert_eq!(saved["items"][0]["url"], REEL);
+    assert!(saved.get("token").is_none(), "{text}");
+}
+
+#[test]
+fn only_a_channel_address_can_be_opened_besides_the_projects_pages() {
     let Some(h) = harness() else { return };
     for bad in [
         "https://evil.example/",
         "https://t.me/",
-        "https://t.me/FillernBot?start=a&x=1",
+        "https://t.me/my_links?start=a&x=1",
         "file:///etc/passwd",
-        "https://t.me.evil.example/FillernBot",
+        "https://t.me.evil.example/my_links",
     ] {
         let err = call(&h.win, "open_url", json!({ "url": bad })).unwrap_err();
         assert!(err.as_str().unwrap().contains("isn't allowed"), "{bad}: {err}");
