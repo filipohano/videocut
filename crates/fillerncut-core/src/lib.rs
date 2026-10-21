@@ -12,6 +12,7 @@ pub mod progress;
 pub mod queue;
 pub mod settings;
 pub mod tiktok;
+pub mod twitter;
 pub mod watermark;
 pub mod ytdlp;
 

@@ -21,6 +21,13 @@ const PHOTO_ID: &str = "2222222222222222222";
 const SINGLE_ID: &str = "4444444444444444444";
 const ERROR_ID: &str = "3333333333333333333";
 
+// Tweets on the local stand-in for Twitter's embed endpoint.
+const TWEET_ONE: &str = "5000000000000000001";
+const TWEET_THREE: &str = "5000000000000000003";
+const TWEET_VIDEO: &str = "5000000000000000004";
+const TWEET_GONE: &str = "5000000000000000005";
+const TWEET_HANGUP: &str = "5000000000000000006";
+
 struct Fixture {
     _dir: tempfile::TempDir,
     host: String,
@@ -60,6 +67,8 @@ fn fixture() -> &'static Fixture {
             }
         });
         std::env::set_var("FILLERNCUT_TIKTOK_API_HOST", &host);
+        std::env::set_var("FILLERNCUT_TWITTER_SYNDICATION_HOST", &host);
+        std::env::set_var("FILLERNCUT_TWITTER_IMAGE_HOST", &host);
         Fixture { _dir: dir, host }
     })
 }
@@ -69,7 +78,42 @@ fn serve(mut s: std::net::TcpStream, video: &[u8], imgs: &[Vec<u8>], music: &[u8
     let n = s.read(&mut buf).unwrap_or(0);
     let req = String::from_utf8_lossy(&buf[..n]);
     let target = req.split_whitespace().nth(1).unwrap_or("/").to_string();
-    let (status, ctype, body): (&str, &str, Vec<u8>) = if target.starts_with("/api/") {
+    let photo = |n: usize| json!({ "type": "photo", "media_url_https": format!("https://pbs.twimg.com/media/img{n}.jpg") });
+    let tweet = |id: &str, media: Vec<Value>| json!({ "__typename": "Tweet", "id_str": id, "text": "hi", "mediaDetails": media });
+    let (status, ctype, body): (&str, &str, Vec<u8>) = if target.starts_with("/tweet-result") {
+        // Like the real endpoint: without a token it answers `{}`.
+        let has_token = target
+            .split("token=")
+            .nth(1)
+            .is_some_and(|t| !t.is_empty() && !t.starts_with('&'));
+        let json = if !has_token {
+            json!({})
+        } else if target.contains(&format!("id={TWEET_ONE}")) {
+            tweet(TWEET_ONE, vec![photo(0)])
+        } else if target.contains(&format!("id={TWEET_THREE}")) {
+            tweet(TWEET_THREE, vec![photo(0), photo(1), photo(2)])
+        } else if target.contains(&format!("id={TWEET_VIDEO}")) {
+            tweet(
+                TWEET_VIDEO,
+                vec![
+                    json!({ "type": "video", "media_url_https": "https://pbs.twimg.com/ext_tw_video_thumb/1/pu/img/x.jpg" }),
+                ],
+            )
+        } else if target.contains(&format!("id={TWEET_HANGUP}")) {
+            return;
+        } else {
+            json!({})
+        };
+        ("200 OK", "application/json", json.to_string().into_bytes())
+    } else if let Some(i) = target
+        .strip_prefix("/media/img")
+        .and_then(|r| r.split_once(".jpg?"))
+        .filter(|(_, query)| query.contains("name=orig"))
+        .and_then(|(n, _)| n.parse::<usize>().ok())
+    {
+        // Only the original size is served, so a picture fetched without `?name=orig` fails.
+        ("200 OK", "image/png", imgs[i].clone())
+    } else if target.starts_with("/api/") {
         let json = if target.contains(VIDEO_ID) {
             json!({"code":0,"data":{"id":VIDEO_ID,"title":"A video","hdplay":format!("{base}/video.mp4"),"play":format!("{base}/video.mp4")}})
         } else if target.contains(SINGLE_ID) {
@@ -631,6 +675,113 @@ fn when_the_picture_lookup_fails_the_original_explanation_is_shown() {
     )
     .unwrap_err();
     assert_eq!(err.as_str().unwrap(), "That post doesn't contain a video.");
+}
+
+// ───────────────────────── X/Twitter posts made of pictures ─────────────────────────
+
+fn tweet_url(id: &str) -> String {
+    format!("https://x.com/someone/status/{id}")
+}
+
+fn tweet_without_video(bin: &Path) {
+    std::fs::write(
+        bin.join("fail.txt"),
+        "ERROR: [twitter] 5000000000000000001: No video could be found in this tweet\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_tweet_with_one_picture_is_downloaded_as_a_photo_to_edit() {
+    let Some(h) = harness() else { return };
+    fixture();
+    let dir = set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    tweet_without_video(&bin);
+
+    let res = call(&h.win, "download_link", json!({ "url": tweet_url(TWEET_ONE) })).unwrap();
+    assert_eq!(res["platform"], "twitter");
+    let path = res["path"].as_str().unwrap();
+    assert_eq!(Path::new(path).parent().unwrap(), dir);
+    assert!(path.ends_with(".jpg"), "{path}");
+    let probe = call(&h.win, "probe_media", json!({ "path": path })).unwrap();
+    assert_eq!(probe["isImage"], true, "it opens in the photo editor");
+    // Only `?name=orig` is served, so getting a picture at all means the original size was asked for.
+    assert_eq!(
+        (probe["width"].as_u64(), probe["height"].as_u64()),
+        (Some(540), Some(720))
+    );
+    assert!(res["note"].is_null());
+}
+
+#[test]
+fn a_tweet_with_several_pictures_becomes_a_portrait_slideshow() {
+    let Some(h) = harness() else { return };
+    fixture();
+    let dir = set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    tweet_without_video(&bin);
+
+    let res = call(&h.win, "download_link", json!({ "url": tweet_url(TWEET_THREE) })).unwrap();
+    let path = res["path"].as_str().unwrap();
+    assert_timestamp_named(path, &dir);
+    let (w, hgt, dur) = dims(path);
+    assert_eq!((w, hgt), (1080, 1920));
+    assert!((dur - 9.0).abs() < 0.3, "3 photos x 3 s, got {dur}");
+    let probe = call(&h.win, "probe_media", json!({ "path": path })).unwrap();
+    assert_eq!(probe["hasAudio"], false);
+    assert!(
+        std::fs::read_dir(h.dir.path().join("cache"))
+            .unwrap()
+            .flatten()
+            .all(|e| !e.file_name().to_string_lossy().starts_with("slideshow-")),
+        "scratch folder is cleaned up"
+    );
+}
+
+#[test]
+fn a_tweet_with_a_video_or_one_that_is_gone_keeps_the_original_explanation() {
+    let Some(h) = harness() else { return };
+    fixture();
+    set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    tweet_without_video(&bin);
+    // A video yt-dlp couldn't get must not turn into its cover picture; a deleted or hidden tweet
+    // has no pictures to give.
+    for id in [TWEET_VIDEO, TWEET_GONE] {
+        let err = call(&h.win, "download_link", json!({ "url": tweet_url(id) })).unwrap_err();
+        assert_eq!(
+            err.as_str().unwrap(),
+            "That post doesn't contain a video.",
+            "{id}"
+        );
+    }
+}
+
+#[test]
+fn trouble_reaching_the_picture_lookup_is_explained() {
+    let Some(h) = harness() else { return };
+    fixture();
+    set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    tweet_without_video(&bin);
+    let err = call(&h.win, "download_link", json!({ "url": tweet_url(TWEET_HANGUP) })).unwrap_err();
+    assert!(err.as_str().unwrap().contains("internet connection"), "{err}");
+}
+
+#[test]
+fn other_x_errors_never_go_looking_for_pictures() {
+    let Some(h) = harness() else { return };
+    fixture();
+    set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    std::fs::write(
+        bin.join("fail.txt"),
+        "ERROR: [twitter] 5000000000000000001: NSFW tweet requires authentication\n",
+    )
+    .unwrap();
+    let err = call(&h.win, "download_link", json!({ "url": tweet_url(TWEET_ONE) })).unwrap_err();
+    assert!(err.as_str().unwrap().contains("Settings"), "{err}");
 }
 
 #[test]

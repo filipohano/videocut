@@ -1,8 +1,9 @@
 //! Downloading posts from TikTok, Instagram and X/Twitter.
 //!
-//! * Instagram and X go through yt-dlp. An Instagram post made of pictures has no video
-//!   for yt-dlp to download, so its pictures are fetched instead: one picture is a photo
-//!   to edit, several are built into a video like a TikTok photo post.
+//! * Instagram and X go through yt-dlp. A post made of pictures has no video for yt-dlp to
+//!   download, so its pictures are fetched instead (Instagram: asked from yt-dlp, X: from
+//!   Twitter's embed endpoint): one picture is a photo to edit, several are built into a
+//!   video like a TikTok photo post.
 //! * TikTok goes through a watermark-free API first (original quality, and the
 //!   only way to get photo posts), falling back to yt-dlp for plain videos.
 
@@ -11,6 +12,7 @@ use fillerncut_core::export::{
 };
 use fillerncut_core::links::{parse_link, tiktok_id_from_resolved, ParsedLink, Platform};
 use fillerncut_core::tiktok::{api_query_url, parse_response, TikTokError, TikTokMedia, API_HOST};
+use fillerncut_core::twitter::{parse_tweet_photos, status_id, syndication_token};
 use fillerncut_core::ytdlp::{
     build_args, build_info_args, explain_error, is_no_video_error, parse_line, parse_photo_post,
     parse_post_music, DownloadOptions, PostMusic, YtDlpLine,
@@ -192,6 +194,11 @@ async fn download_with_ytdlp<R: Runtime>(
                 return Ok(found);
             }
         }
+        if matches!(platform, Platform::Twitter) && is_no_video_error(&stderr) {
+            if let Some(found) = download_tweet_photos(app, state, token, url, out_dir, stem).await? {
+                return Ok(found);
+            }
+        }
         return Err(explain_error(
             &stderr,
             platform,
@@ -338,6 +345,84 @@ fn read_post_music(dir: &Path) -> Option<PostMusic> {
         }
         parse_post_music(&std::fs::read_to_string(path).ok()?)
     })
+}
+
+/// Twitter's embed endpoint. Overridable so the integration tests can point it at a local server.
+fn syndication_host() -> String {
+    std::env::var("FILLERNCUT_TWITTER_SYNDICATION_HOST")
+        .unwrap_or_else(|_| "https://cdn.syndication.twimg.com".to_string())
+}
+
+/// Where a tweet's picture is fetched from. Overridable (like the above) for the tests.
+fn tweet_picture_url(url: &str) -> String {
+    match (
+        std::env::var("FILLERNCUT_TWITTER_IMAGE_HOST"),
+        url.strip_prefix("https://pbs.twimg.com"),
+    ) {
+        (Ok(host), Some(rest)) => format!("{host}{rest}"),
+        _ => url.to_string(),
+    }
+}
+
+/// The file type of a picture from its address (`.../abc.png?name=orig` → `png`).
+fn picture_extension(url: &str) -> &'static str {
+    let path = url.split(['?', '#']).next().unwrap_or("");
+    match path.rsplit('.').next().map(str::to_ascii_lowercase).as_deref() {
+        Some("png") => "png",
+        Some("webp") => "webp",
+        _ => "jpg",
+    }
+}
+
+/// A tweet made of pictures has nothing for yt-dlp to download, and yt-dlp doesn't say where the
+/// pictures are. Twitter's embed endpoint does, for public tweets. One picture comes back as a
+/// photo (the editor opens those), several become a video like a TikTok photo post. `None` when
+/// the tweet has no pictures to give (it has a video, was deleted, is protected or marked
+/// sensitive), so the caller can show yt-dlp's own explanation.
+async fn download_tweet_photos<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    token: &CancellationToken,
+    url: &str,
+    out_dir: &Path,
+    stem: &str,
+) -> Result<Option<(PathBuf, Option<String>)>, String> {
+    let Some(id) = status_id(url) else {
+        return Ok(None);
+    };
+    emit_progress(app, JOB, None, Some("Looking for the photos…"));
+    let client = http_client()?;
+    let api = format!(
+        "{}/tweet-result?id={id}&token={}",
+        syndication_host(),
+        syndication_token(&id)
+    );
+    let answer = tokio::select! {
+        _ = token.cancelled() => return Err(CANCELLED.into()),
+        r = async { client.get(&api).timeout(Duration::from_secs(15)).send().await?.text().await } => r,
+    };
+    let body = answer.map_err(|_| {
+        "Couldn't read the pictures of that post. Check your internet connection and try again.".to_string()
+    })?;
+    let Ok(photos) = parse_tweet_photos(&body) else {
+        return Ok(None);
+    };
+    let photos: Vec<String> = photos.iter().map(|p| tweet_picture_url(p)).collect();
+
+    if let [photo] = photos.as_slice() {
+        let dest = out_dir.join(format!("{stem}.{}", picture_extension(photo)));
+        emit_progress(app, JOB, Some(0.0), Some("Downloading the photo…"));
+        download_file(&client, photo, &dest, token, |f| {
+            emit_progress(app, JOB, Some(f), Some("Downloading the photo…"))
+        })
+        .await?;
+        return Ok(Some((dest, None)));
+    }
+    build_photo_slideshow(
+        app, state, token, &client, stem, &photos, None, false, out_dir, stem,
+    )
+    .await
+    .map(|path| Some((path, None)))
 }
 
 // ───────────────────────────── TikTok ─────────────────────────────
@@ -664,5 +749,32 @@ async fn build_photo_slideshow<R: Runtime>(
             let _ = std::fs::remove_file(&partial);
             Err(e)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::picture_extension;
+
+    #[test]
+    fn a_picture_keeps_the_file_type_of_its_address() {
+        assert_eq!(
+            picture_extension("https://pbs.twimg.com/media/abc.jpg?name=orig"),
+            "jpg"
+        );
+        assert_eq!(
+            picture_extension("https://pbs.twimg.com/media/abc.PNG?name=orig"),
+            "png"
+        );
+        assert_eq!(picture_extension("https://pbs.twimg.com/media/abc.webp"), "webp");
+        // Anything unknown becomes a jpg, which the editor opens.
+        assert_eq!(
+            picture_extension("https://pbs.twimg.com/media/abc?name=orig"),
+            "jpg"
+        );
+        assert_eq!(
+            picture_extension("https://pbs.twimg.com/media/abc.exe?x=.png"),
+            "jpg"
+        );
     }
 }

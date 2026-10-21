@@ -8,7 +8,9 @@ Download, crop, trim and watermark videos on your Mac or Windows PC — everythi
   **Instagram photo posts** work too: with music they become a 1080×1920 video of the photo(s) and the part of the
   song the post plays (3 s per photo, or as long as the music for a single photo); without music a single photo opens
   as a photo to edit and a carousel becomes a silent video. Instagram only hands out the music to a logged-in
-  browser (see below).
+  browser (see below). **X/Twitter posts with photos** work too, at full size: one photo opens as a photo to edit,
+  several are built into a 1080×1920 video (3 s per photo). Only public tweets: Twitter doesn't show the pictures
+  of deleted, protected or sensitive ones without a login.
 - **Telegram queue.** Share TikTok, Instagram and X links from your phone to a Telegram channel of your own, and
   they wait in a queue on the start screen: one tap opens one for editing. The app reads the channel when it
   launches and every 30 minutes while it's open (**Refresh** reads it at once and starts the 30 minutes over).
