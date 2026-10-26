@@ -2,7 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type Platform = "tiktok" | "instagram" | "twitter";
+export type Platform = "tiktok" | "instagram" | "twitter" | "youtube";
 export type UpdateMode = "auto" | "notify" | "manual";
 export type CookieBrowser = "safari" | "chrome" | "firefox" | "brave" | "edge";
 

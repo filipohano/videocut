@@ -6,7 +6,7 @@ import { store } from "../store";
 import { $, h } from "./dom";
 import { toast } from "./toast";
 
-const PLATFORM_NAMES: Record<string, string> = { tiktok: "TikTok", instagram: "Instagram", twitter: "X" };
+const PLATFORM_NAMES: Record<string, string> = { tiktok: "TikTok", instagram: "Instagram", twitter: "X", youtube: "YouTube" };
 
 const startVisible = () => !$("#view-start").classList.contains("hidden");
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -157,7 +157,7 @@ export function initQueue(fetchLink: (url: string) => Promise<boolean>): void {
         { class: "queue-steps muted small" },
         h("li", {}, "In Telegram, create a channel and make it ", h("strong", {}, "Public"), " with a username (Channel settings → Channel type)."),
         h("li", {}, "Type that username here."),
-        h("li", {}, "From your phone, share TikTok, Instagram and X links to the channel. They wait here: tap one to open it."),
+        h("li", {}, "From your phone, share TikTok, Instagram, X and YouTube links to the channel. They wait here: tap one to open it."),
       ),
       form,
       formError && h("p", { class: "small status-err queue-error", role: "alert" }, formError),

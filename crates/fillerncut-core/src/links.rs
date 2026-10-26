@@ -10,6 +10,7 @@ pub enum Platform {
     TikTok,
     Instagram,
     Twitter,
+    YouTube,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +31,10 @@ pub enum ParsedLink {
     Twitter {
         url: String,
     },
+    /// A single YouTube video (also Shorts and past live streams), as `watch?v=<id>`.
+    YouTube {
+        url: String,
+    },
 }
 
 impl ParsedLink {
@@ -38,6 +43,7 @@ impl ParsedLink {
             ParsedLink::TikTok { .. } | ParsedLink::TikTokShort { .. } => Platform::TikTok,
             ParsedLink::Instagram { .. } => Platform::Instagram,
             ParsedLink::Twitter { .. } => Platform::Twitter,
+            ParsedLink::YouTube { .. } => Platform::YouTube,
         }
     }
 
@@ -46,7 +52,8 @@ impl ParsedLink {
             ParsedLink::TikTok { url, .. }
             | ParsedLink::TikTokShort { url }
             | ParsedLink::Instagram { url }
-            | ParsedLink::Twitter { url } => url,
+            | ParsedLink::Twitter { url }
+            | ParsedLink::YouTube { url } => url,
         }
     }
 }
@@ -57,10 +64,12 @@ pub enum LinkError {
     Empty,
     #[error("That doesn't look like a link")]
     NotAUrl,
-    #[error("Unsupported site. Paste a TikTok, Instagram or X/Twitter link")]
+    #[error("Unsupported site. Paste a TikTok, Instagram, X/Twitter or YouTube link")]
     UnsupportedSite,
     #[error("This {0} link doesn't point to a specific post")]
     NoPost(&'static str),
+    #[error("This YouTube link doesn't point to a single video. Open the video itself and copy its link")]
+    NoVideo,
 }
 
 /// Parse whatever the user pasted: a full link, a share link, or a bare
@@ -81,6 +90,7 @@ pub fn parse_link(input: &str) -> Result<ParsedLink, LinkError> {
         .strip_prefix("www.")
         .or_else(|| host.strip_prefix("m."))
         .or_else(|| host.strip_prefix("mobile."))
+        .or_else(|| host.strip_prefix("music."))
         .unwrap_or(&host)
         .to_string();
     let segments: Vec<&str> = url
@@ -98,6 +108,11 @@ pub fn parse_link(input: &str) -> Result<ParsedLink, LinkError> {
             }
         }
         "instagram.com" => parse_instagram(&segments),
+        "youtube.com" | "youtube-nocookie.com" => parse_youtube(&url, &segments),
+        "youtu.be" => segments
+            .first()
+            .and_then(|id| youtube_video(id))
+            .ok_or(LinkError::NoVideo),
         "twitter.com" | "x.com" | "fxtwitter.com" | "vxtwitter.com" | "fixupx.com" => {
             parse_twitter(&segments)
         }
@@ -187,6 +202,33 @@ fn parse_instagram(segments: &[&str]) -> Result<ParsedLink, LinkError> {
         }
     }
     Err(LinkError::NoPost("Instagram"))
+}
+
+/// A YouTube video id: 11 characters from `A-Z a-z 0-9 _ -`.
+fn is_youtube_id(s: &str) -> bool {
+    s.len() == 11
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+fn youtube_video(id: &str) -> Option<ParsedLink> {
+    is_youtube_id(id).then(|| ParsedLink::YouTube {
+        url: format!("https://www.youtube.com/watch?v={id}"),
+    })
+}
+
+fn parse_youtube(url: &Url, segments: &[&str]) -> Result<ParsedLink, LinkError> {
+    let found = match segments {
+        // watch?v=<id>, which may also carry a playlist and a start time: only the video is used.
+        ["watch"] => url
+            .query_pairs()
+            .find(|(key, _)| key == "v")
+            .and_then(|(_, id)| youtube_video(&id)),
+        // /shorts/<id>, /live/<id>, /embed/<id>, /v/<id>
+        ["shorts" | "live" | "embed" | "v", id, ..] => youtube_video(id),
+        _ => None,
+    };
+    found.ok_or(LinkError::NoVideo)
 }
 
 fn parse_twitter(segments: &[&str]) -> Result<ParsedLink, LinkError> {
@@ -357,6 +399,62 @@ mod tests {
     }
 
     #[test]
+    fn youtube_variants_all_become_the_same_watch_link() {
+        let want = ParsedLink::YouTube {
+            url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ".into(),
+        };
+        for input in [
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://m.youtube.com/watch?v=dQw4w9WgXcQ&t=43s",
+            "https://music.youtube.com/watch?v=dQw4w9WgXcQ&si=abc",
+            "https://youtu.be/dQw4w9WgXcQ?si=abc&t=3",
+            "https://www.youtube.com/shorts/dQw4w9WgXcQ?feature=share",
+            "https://www.youtube.com/live/dQw4w9WgXcQ?si=x",
+            "https://www.youtube.com/embed/dQw4w9WgXcQ",
+            "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+            "https://www.youtube.com/v/dQw4w9WgXcQ",
+            // A video inside a playlist is just the video, like with every other link.
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLabc123&index=4",
+            "Check this out https://youtu.be/dQw4w9WgXcQ lol",
+        ] {
+            assert_eq!(parse_link(input), Ok(want.clone()), "{input}");
+        }
+        assert_eq!(want.platform(), Platform::YouTube);
+        assert_eq!(want.url(), "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+        // Ids may contain - and _.
+        assert!(parse_link("https://youtu.be/a-b_c-d_e-f").is_ok());
+    }
+
+    #[test]
+    fn youtube_links_that_are_not_one_video_are_explained() {
+        for input in [
+            "https://www.youtube.com/",
+            "https://www.youtube.com/playlist?list=PLabc123",
+            "https://www.youtube.com/@someone",
+            "https://www.youtube.com/channel/UCabc",
+            "https://www.youtube.com/watch",
+            "https://www.youtube.com/watch?v=short",
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQextra",
+            "https://www.youtube.com/watch?v=dQw4w9WgX!Q",
+            "https://www.youtube.com/watch?list=PLabc123",
+            "https://www.youtube.com/shorts/",
+            "https://www.youtube.com/results?search_query=cats",
+            "https://youtu.be/",
+            "https://youtu.be/not-an-id",
+        ] {
+            assert_eq!(parse_link(input), Err(LinkError::NoVideo), "{input}");
+        }
+        // Look-alike hosts are other sites.
+        for input in [
+            "https://youtube.com.evil.example/watch?v=dQw4w9WgXcQ",
+            "https://notyoutube.com/watch?v=dQw4w9WgXcQ",
+        ] {
+            assert_eq!(parse_link(input), Err(LinkError::UnsupportedSite), "{input}");
+        }
+    }
+
+    #[test]
     fn share_text_with_link_is_accepted() {
         assert_eq!(
             parse_link("Look at this https://x.com/jack/status/20 wow"),
@@ -369,7 +467,7 @@ mod tests {
     #[test]
     fn rejects_other_sites_and_garbage() {
         assert_eq!(
-            parse_link("https://youtube.com/watch?v=abc"),
+            parse_link("https://vimeo.com/76979871"),
             Err(LinkError::UnsupportedSite)
         );
         assert_eq!(parse_link("hello"), Err(LinkError::NotAUrl));

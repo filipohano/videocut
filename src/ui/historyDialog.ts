@@ -10,7 +10,7 @@ import { toast } from "./toast";
 
 type Filter = "all" | "download" | "export";
 
-const PLATFORM_NAMES: Record<string, string> = { tiktok: "TikTok", instagram: "Instagram", twitter: "X / Twitter" };
+const PLATFORM_NAMES: Record<string, string> = { tiktok: "TikTok", instagram: "Instagram", twitter: "X / Twitter", youtube: "YouTube" };
 
 export function formatWhen(unixSeconds: number, now = new Date()): string {
   const d = new Date(unixSeconds * 1000);

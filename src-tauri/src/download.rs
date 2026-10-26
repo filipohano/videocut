@@ -1,5 +1,6 @@
-//! Downloading posts from TikTok, Instagram and X/Twitter.
+//! Downloading posts from TikTok, Instagram, X/Twitter and YouTube.
 //!
+//! * YouTube goes through yt-dlp.
 //! * Instagram and X go through yt-dlp. A post made of pictures has no video for yt-dlp to
 //!   download, so its pictures are fetched instead (Instagram: asked from yt-dlp, X: from
 //!   Twitter's embed endpoint): one picture is a photo to edit, several are built into a
@@ -15,7 +16,7 @@ use fillerncut_core::tiktok::{api_query_url, parse_response, TikTokError, TikTok
 use fillerncut_core::twitter::{parse_tweet_photos, status_id, syndication_token};
 use fillerncut_core::ytdlp::{
     build_args, build_info_args, explain_error, is_no_video_error, parse_line, parse_photo_post,
-    parse_post_music, DownloadOptions, PostMusic, YtDlpLine,
+    parse_post_music, DownloadOptions, PostMusic, YtDlpLine, LIVE_STREAM_MESSAGE,
 };
 use futures_util::StreamExt;
 use serde::Serialize;
@@ -95,7 +96,7 @@ pub async fn download_link<R: Runtime>(
             let (path, title) = download_tiktok(&app, &state, &guard.token, &link, &out_dir, &stem).await?;
             (path, title, None)
         }
-        ParsedLink::Instagram { url } | ParsedLink::Twitter { url } => {
+        ParsedLink::Instagram { url } | ParsedLink::Twitter { url } | ParsedLink::YouTube { url } => {
             let (path, note) =
                 download_with_ytdlp(&app, &state, &guard.token, url, platform, &out_dir, &stem).await?;
             (path, None, note)
@@ -113,6 +114,24 @@ pub async fn download_link<R: Runtime>(
 }
 
 // ───────────────────────────── yt-dlp ─────────────────────────────
+
+/// A progress reading that never goes backwards: when a second download (the sound, after the
+/// video) starts again from 0%, the bar stays where it was and says what is happening.
+fn forward_progress(shown: &mut f64, fraction: Option<f64>) -> (Option<f64>, &'static str) {
+    let Some(f) = fraction else {
+        return (None, "Downloading…");
+    };
+    let restarted = f + 0.3 < *shown;
+    *shown = shown.max(f);
+    (
+        Some(*shown),
+        if restarted || (*shown >= 1.0 && f < 1.0) {
+            "Downloading the sound…"
+        } else {
+            "Downloading…"
+        },
+    )
+}
 
 async fn download_with_ytdlp<R: Runtime>(
     app: &AppHandle<R>,
@@ -167,6 +186,10 @@ async fn download_with_ytdlp<R: Runtime>(
     let mut lines = BufReader::new(stdout).lines();
 
     let mut file: Option<String> = None;
+    let mut live = false;
+    // Sites like YouTube serve video and sound as separate downloads, and the second one
+    // starts again from 0%. The bar only ever moves forward.
+    let mut shown: f64 = 0.0;
     loop {
         tokio::select! {
             _ = token.cancelled() => {
@@ -175,8 +198,12 @@ async fn download_with_ytdlp<R: Runtime>(
             }
             line = lines.next_line() => match line {
                 Ok(Some(l)) => match parse_line(&l) {
-                    YtDlpLine::Progress { fraction, .. } => emit_progress(app, JOB, fraction, Some("Downloading…")),
+                    YtDlpLine::Progress { fraction, .. } => {
+                        let (fraction, message) = forward_progress(&mut shown, fraction);
+                        emit_progress(app, JOB, fraction, Some(message));
+                    }
                     YtDlpLine::File(f) => file = Some(f),
+                    YtDlpLine::LiveStatus(status) => live = status == "is_live",
                     YtDlpLine::Other => {}
                 },
                 Ok(None) => break,
@@ -205,7 +232,14 @@ async fn download_with_ytdlp<R: Runtime>(
             settings.cookies_browser.is_some(),
         ));
     }
-    let path = file.ok_or("The download finished but no file was produced")?;
+    let Some(path) = file else {
+        // yt-dlp skips a live stream that is still going (it would never end) without an error.
+        return Err(if live {
+            LIVE_STREAM_MESSAGE.to_string()
+        } else {
+            "The download finished but no file was produced".to_string()
+        });
+    };
     if !Path::new(&path).is_file() {
         return Err("The download finished but the file is missing".into());
     }
@@ -754,7 +788,26 @@ async fn build_photo_slideshow<R: Runtime>(
 
 #[cfg(test)]
 mod tests {
-    use super::picture_extension;
+    use super::{forward_progress, picture_extension};
+
+    #[test]
+    fn progress_never_goes_backwards_when_the_sound_starts_over() {
+        let mut shown = 0.0;
+        let mut seen = Vec::new();
+        for f in [0.1, 0.5, 1.0, 0.0, 0.4, 1.0, 1.0] {
+            seen.push(forward_progress(&mut shown, Some(f)));
+        }
+        let fractions: Vec<f64> = seen.iter().map(|(f, _)| f.unwrap()).collect();
+        assert_eq!(fractions, vec![0.1, 0.5, 1.0, 1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(seen[2].1, "Downloading…");
+        assert_eq!(seen[3].1, "Downloading the sound…");
+        assert_eq!(seen[4].1, "Downloading the sound…");
+        // A download without a known size stays unknown, and a single file is untouched.
+        assert_eq!(forward_progress(&mut 0.5, None), (None, "Downloading…"));
+        let mut one = 0.0;
+        assert_eq!(forward_progress(&mut one, Some(0.5)), (Some(0.5), "Downloading…"));
+        assert_eq!(forward_progress(&mut one, Some(0.5)), (Some(0.5), "Downloading…"));
+    }
 
     #[test]
     fn a_picture_keeps_the_file_type_of_its_address() {

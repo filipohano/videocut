@@ -8,6 +8,7 @@ use std::path::PathBuf;
 /// normal chatter.
 const PROGRESS_PREFIX: &str = "FCPROG|";
 const FILE_PREFIX: &str = "FCFILE|";
+const LIVE_PREFIX: &str = "FCLIVE|";
 
 #[derive(Debug, Clone)]
 pub struct DownloadOptions {
@@ -28,10 +29,18 @@ pub fn build_args(opts: &DownloadOptions) -> Vec<String> {
         // Re-downloading must always report the final path, so never skip.
         "--force-overwrites".into(),
         "--restrict-filenames".into(),
-        // Prefer H.264/AAC so the file plays in the preview and edits quickly,
-        // then fall back to whatever is best.
+        // Prefer H.264/AAC so the file plays in the preview and edits quickly, then fall back
+        // to whatever is best. Never more than 1080p: sites like YouTube only offer more in
+        // VP9/AV1, which are huge and slow to edit, and the export is a social-media video anyway.
+        // (`<=?` lets a format through when its height isn't known.)
         "-f".into(),
-        "bv*[vcodec^=avc1]+ba[ext=m4a]/bv*+ba/b".into(),
+        "bv*[vcodec^=avc1][height<=?1080]+ba[ext=m4a]/bv*[height<=?1080]+ba/b[height<=?1080]/b".into(),
+        // A live stream that is still going would download until it ends. Skip it, but report it
+        // first (`--print` is quiet, so the skip itself would be invisible).
+        "--match-filters".into(),
+        "!is_live".into(),
+        "--print".into(),
+        format!("pre_process:{LIVE_PREFIX}%(live_status)s"),
         "--merge-output-format".into(),
         "mp4".into(),
         "-o".into(),
@@ -211,6 +220,8 @@ pub enum YtDlpLine {
     },
     /// The final path of a finished download.
     File(String),
+    /// What yt-dlp says about whether the video is a live stream (`is_live`, `not_live`, `was_live`…).
+    LiveStatus(String),
     Other,
 }
 
@@ -226,6 +237,9 @@ pub fn parse_line(line: &str) -> YtDlpLine {
     let line = line.trim();
     if let Some(rest) = line.strip_prefix(FILE_PREFIX) {
         return YtDlpLine::File(rest.trim().to_string());
+    }
+    if let Some(rest) = line.strip_prefix(LIVE_PREFIX) {
+        return YtDlpLine::LiveStatus(rest.trim().to_string());
     }
     if let Some(rest) = line.strip_prefix(PROGRESS_PREFIX) {
         let f: Vec<&str> = rest.split('|').collect();
@@ -245,9 +259,26 @@ pub fn parse_line(line: &str) -> YtDlpLine {
     YtDlpLine::Other
 }
 
+/// The name of a site as it is written in messages.
+pub fn site_name(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Instagram => "Instagram",
+        Platform::Twitter => "X",
+        Platform::TikTok => "TikTok",
+        Platform::YouTube => "YouTube",
+    }
+}
+
+/// The message to show when a live stream was skipped instead of downloaded.
+pub const LIVE_STREAM_MESSAGE: &str =
+    "That's a live stream that hasn't ended yet. Download it once it is over.";
+
 /// Turn yt-dlp's stderr into something a person can act on.
 pub fn explain_error(stderr: &str, platform: Platform, used_cookies: bool) -> String {
     let lower = stderr.to_ascii_lowercase();
+    let site = site_name(platform);
+    let youtube = platform == Platform::YouTube;
+    let noun = if youtube { "video" } else { "post" };
     let needs_login = lower.contains("login required")
         || lower.contains("log in")
         || lower.contains("sign in")
@@ -271,19 +302,46 @@ pub fn explain_error(stderr: &str, platform: Platform, used_cookies: bool) -> St
     {
         return "Couldn't reach the site. Check your internet connection and try again.".into();
     }
+    if youtube {
+        if lower.contains("not a bot") {
+            // YouTube asks this of some connections (often VPNs and shared networks).
+            return if used_cookies {
+                "YouTube is asking to confirm you're not a bot, even with your browser login. Open YouTube in that browser, make sure you're logged in, play any video once, and try again.".into()
+            } else {
+                "YouTube is asking to confirm you're not a bot, which it does for some connections. Open Settings → Downloads, pick the browser you're logged into YouTube with, and try again.".into()
+            };
+        }
+        if lower.contains("will begin in")
+            || lower.contains("premieres in")
+            || lower.contains("premiere will begin")
+        {
+            return "That video hasn't started yet. Try again after it has begun.".into();
+        }
+        if lower.contains("members-only") || lower.contains("join this channel") {
+            return "That video is for channel members only.".into();
+        }
+        if lower.contains("http error 429") || lower.contains("too many requests") {
+            return "YouTube is limiting requests from your connection right now. Try again in a while."
+                .into();
+        }
+        if lower.contains("requested format is not available") {
+            return "YouTube didn't offer a format FillernCut can use for that video. Update the downloader (Settings → Downloads → Update now) and try again.".into();
+        }
+        if lower.contains("video unavailable")
+            || lower.contains("this video is unavailable")
+            || lower.contains("video is not available")
+        {
+            return "That video is unavailable. It may have been deleted, made private, or blocked in your country.".into();
+        }
+    }
     if needs_login {
-        let site = match platform {
-            Platform::Instagram => "Instagram",
-            Platform::Twitter => "X",
-            Platform::TikTok => "TikTok",
-        };
         return if used_cookies {
             format!(
-                "{site} wouldn't give out this post even with your browser login. It may be private, deleted, or your login expired — open {site} in that browser and try again."
+                "{site} wouldn't give out this {noun} even with your browser login. It may be private, deleted, or your login expired — open {site} in that browser and try again."
             )
         } else {
             format!(
-                "{site} requires a login for this post. Open Settings → Downloads and pick the browser you're logged into {site} with, then try again."
+                "{site} requires a login for this {noun}. Open Settings → Downloads and pick the browser you're logged into {site} with, then try again."
             )
         };
     }
@@ -292,9 +350,26 @@ pub fn explain_error(stderr: &str, platform: Platform, used_cookies: bool) -> St
         .lines()
         .rev()
         .find(|l| l.contains("ERROR"))
-        .map(|l| l.trim().trim_start_matches("ERROR:").trim().to_string())
+        .map(|l| strip_extractor_prefix(l.trim().trim_start_matches("ERROR:").trim()).to_string())
         .filter(|l| !l.is_empty())
         .unwrap_or_else(|| "The download failed.".into())
+}
+
+/// `[youtube] dQw4w9WgXcQ: Some message` → `Some message`.
+fn strip_extractor_prefix(message: &str) -> &str {
+    let Some(rest) = message.strip_prefix('[') else {
+        return message;
+    };
+    let Some((tag, rest)) = rest.split_once("] ") else {
+        return message;
+    };
+    if tag.contains(' ') {
+        return message;
+    }
+    match rest.split_once(": ") {
+        Some((id, text)) if !id.contains(' ') && !text.is_empty() => text,
+        _ => rest,
+    }
 }
 
 #[cfg(test)]
@@ -581,6 +656,135 @@ mod tests {
         // The logged-out web page is HTML, not JSON.
         assert_eq!(parse_post_music("<html><script>{}</script></html>"), None);
         assert_eq!(parse_post_music(""), None);
+    }
+
+    #[test]
+    fn the_format_choice_never_goes_above_1080p() {
+        let a = build_args(&opts());
+        let f = a.iter().position(|x| x == "-f").unwrap();
+        assert!(
+            a[f + 1].starts_with("bv*[vcodec^=avc1][height<=?1080]+ba[ext=m4a]/"),
+            "{}",
+            a[f + 1]
+        );
+        assert!(
+            a[f + 1].ends_with("/b"),
+            "a last resort that takes whatever there is"
+        );
+        assert_eq!(
+            a[f + 1].matches("[height<=?1080]").count(),
+            3,
+            "three capped choices, then the uncapped last resort"
+        );
+    }
+
+    #[test]
+    fn live_streams_are_reported_and_skipped() {
+        let a = build_args(&opts());
+        let m = a.iter().position(|x| x == "--match-filters").unwrap();
+        assert_eq!(a[m + 1], "!is_live");
+        assert!(a.contains(&"pre_process:FCLIVE|%(live_status)s".to_string()));
+        assert_eq!(
+            parse_line("FCLIVE|is_live"),
+            YtDlpLine::LiveStatus("is_live".into())
+        );
+        assert_eq!(
+            parse_line("FCLIVE|not_live\n"),
+            YtDlpLine::LiveStatus("not_live".into())
+        );
+    }
+
+    #[test]
+    fn site_names_read_well_in_messages() {
+        assert_eq!(site_name(Platform::YouTube), "YouTube");
+        assert_eq!(site_name(Platform::Twitter), "X");
+    }
+
+    #[test]
+    fn youtube_errors_say_what_to_do() {
+        let yt = |text: &str, cookies: bool| explain_error(text, Platform::YouTube, cookies);
+        let bot = "ERROR: [youtube] abc: Sign in to confirm you're not a bot. Use --cookies-from-browser or --cookies";
+        let msg = yt(bot, false);
+        assert!(msg.contains("not a bot") && msg.contains("Settings"), "{msg}");
+        assert!(
+            yt(bot, true).contains("even with your browser login"),
+            "{}",
+            yt(bot, true)
+        );
+        // The curly apostrophe YouTube really uses is handled as well.
+        assert!(yt(
+            "ERROR: [youtube] abc: Sign in to confirm you\u{2019}re not a bot.",
+            false
+        )
+        .contains("not a bot"));
+
+        for (text, wanted) in [
+            ("ERROR: [youtube] abc: This video is unavailable", "unavailable"),
+            (
+                "ERROR: [youtube] abc: Video unavailable. This video is no longer available",
+                "unavailable",
+            ),
+            ("ERROR: [youtube] abc: Premieres in 5 hours", "hasn't started"),
+            (
+                "ERROR: [youtube] abc: This live event will begin in 2 days",
+                "hasn't started",
+            ),
+            (
+                "ERROR: [youtube] abc: Join this channel to get access to members-only content",
+                "channel members",
+            ),
+            (
+                "ERROR: [youtube] abc: HTTP Error 429: Too Many Requests",
+                "limiting requests",
+            ),
+            (
+                "ERROR: [youtube] abc: Requested format is not available",
+                "Update now",
+            ),
+        ] {
+            assert!(yt(text, false).contains(wanted), "{text} -> {}", yt(text, false));
+        }
+        // Login problems talk about a video, not a post.
+        let age = yt(
+            "ERROR: [youtube] abc: Sign in to confirm your age. This video may be inappropriate",
+            false,
+        );
+        assert!(age.contains("YouTube requires a login for this video"), "{age}");
+        assert!(yt(
+            "ERROR: [youtube] abc: Private video. Sign in if you've been granted access",
+            true
+        )
+        .contains("this video even with"));
+    }
+
+    #[test]
+    fn other_sites_keep_their_wording() {
+        let msg = explain_error("ERROR: login required", Platform::TikTok, false);
+        assert!(msg.contains("TikTok requires a login for this post"), "{msg}");
+        // YouTube's own errors only apply to YouTube.
+        assert_eq!(
+            explain_error("ERROR: Video unavailable", Platform::Instagram, false),
+            "Video unavailable"
+        );
+    }
+
+    #[test]
+    fn unknown_errors_lose_the_extractor_prefix() {
+        assert_eq!(
+            explain_error(
+                "ERROR: [youtube] dQw4w9WgXcQ: Something odd happened",
+                Platform::YouTube,
+                false
+            ),
+            "Something odd happened"
+        );
+        assert_eq!(
+            strip_extractor_prefix("[generic] Unable to find it"),
+            "Unable to find it"
+        );
+        assert_eq!(strip_extractor_prefix("[not a tag] x: y"), "[not a tag] x: y");
+        assert_eq!(strip_extractor_prefix("no prefix here"), "no prefix here");
+        assert_eq!(strip_extractor_prefix("[youtube] id: "), "id: ");
     }
 
     #[test]

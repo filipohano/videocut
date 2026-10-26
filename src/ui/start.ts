@@ -78,7 +78,7 @@ export function initStart(openVideo: (path: string) => Promise<boolean>): { fetc
   form.addEventListener("submit", (e) => {
     e.preventDefault();
     const text = input.value.trim();
-    if (!text) return toast("Paste a TikTok, Instagram or X link first", { kind: "info" });
+    if (!text) return toast("Paste a TikTok, Instagram, X or YouTube link first", { kind: "info" });
     void fetchLink(text);
   });
 

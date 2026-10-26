@@ -220,7 +220,7 @@ export function initSettingsDialog(): void {
           h(
             "p",
             { class: "muted small", style: { margin: "0" } },
-            `Instagram (and some X posts) need you to be logged in. Pick the browser you're logged into; cookies are only read locally by the downloader and never leave your ${store.platform === "macos" ? "Mac" : "PC"}.${store.platform === "macos" ? " Safari needs Full Disk Access for FillernCut (System Settings → Privacy & Security)." : ""}`,
+            `Instagram, some X posts and some YouTube videos (age-restricted ones, or when YouTube asks you to confirm you're not a bot) need you to be logged in. Pick the browser you're logged into; cookies are only read locally by the downloader and never leave your ${store.platform === "macos" ? "Mac" : "PC"}.${store.platform === "macos" ? " Safari needs Full Disk Access for FillernCut (System Settings → Privacy & Security)." : ""}`,
           ),
         ),
         h("section", { class: "set-section" }, h("h3", {}, "Folders"), finishedRow, askRow),

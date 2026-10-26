@@ -9,9 +9,15 @@ describe("detectPlatform", () => {
     expect(detectPlatform("instagram.com/reel/abc")).toBe("Instagram");
     expect(detectPlatform("https://x.com/jack/status/20")).toBe("X / Twitter");
     expect(detectPlatform("https://mobile.twitter.com/jack/status/20")).toBe("X / Twitter");
+    expect(detectPlatform("https://www.youtube.com/watch?v=dQw4w9WgXcQ")).toBe("YouTube");
+    expect(detectPlatform("https://m.youtube.com/shorts/dQw4w9WgXcQ")).toBe("YouTube");
+    expect(detectPlatform("https://music.youtube.com/watch?v=dQw4w9WgXcQ")).toBe("YouTube");
+    expect(detectPlatform("youtu.be/dQw4w9WgXcQ")).toBe("YouTube");
   });
   it("rejects everything else", () => {
-    expect(detectPlatform("https://youtube.com/watch?v=1")).toBeNull();
+    expect(detectPlatform("https://vimeo.com/76979871")).toBeNull();
+    expect(detectPlatform("https://notyoutube.com/watch?v=dQw4w9WgXcQ")).toBeNull();
+    expect(detectPlatform("https://youtube.com.evil.example/watch?v=dQw4w9WgXcQ")).toBeNull();
     expect(detectPlatform("hello")).toBeNull();
     expect(detectPlatform("")).toBeNull();
     expect(detectPlatform("https://nottiktok.com/x")).toBeNull();

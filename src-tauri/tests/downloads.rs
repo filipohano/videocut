@@ -166,6 +166,9 @@ for a in "$@"; do
   fi
 done
 printf '%s\n' "$@" > "$here/args.txt"
+# yt-dlp reports whether the video is live before it decides to download it.
+if [ -f "$here/live.txt" ]; then echo "FCLIVE|is_live"; exit 0; fi
+echo "FCLIVE|not_live"
 [ -f "$here/slow.txt" ] && exec sleep 30
 if [ -f "$here/fail.txt" ]; then cat "$here/fail.txt" >&2; exit 1; fi
 while [ $# -gt 0 ]; do
@@ -176,6 +179,12 @@ out="$(dirname "$template")/fake-download.mp4"
 cp "$(cat "$here/sample_path.txt")" "$out"
 echo "FCPROG|50|100|NA|1000"
 echo "FCPROG|100|100|NA|1000"
+if [ -f "$here/two-streams.txt" ]; then
+  # Video first, then the sound starts over from 0%.
+  echo "FCPROG|0|40|NA|1000"
+  echo "FCPROG|20|40|NA|1000"
+  echo "FCPROG|40|40|NA|1000"
+fi
 echo "FCFILE|$out"
 "#;
 
@@ -784,6 +793,103 @@ fn other_x_errors_never_go_looking_for_pictures() {
     assert!(err.as_str().unwrap().contains("Settings"), "{err}");
 }
 
+// ───────────────────────── YouTube ─────────────────────────
+
+const YOUTUBE: &str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+
+#[test]
+fn youtube_links_of_every_kind_go_to_ytdlp_as_one_clean_watch_link() {
+    let Some(h) = harness() else { return };
+    let dir = set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    for input in [
+        "https://youtu.be/dQw4w9WgXcQ?si=tracking&t=30",
+        "https://www.youtube.com/shorts/dQw4w9WgXcQ",
+        "https://m.youtube.com/watch?v=dQw4w9WgXcQ&list=PLabc123&index=2",
+        "look at this https://music.youtube.com/watch?v=dQw4w9WgXcQ lol",
+    ] {
+        let res = call(&h.win, "download_link", json!({ "url": input })).unwrap();
+        assert_eq!(res["platform"], "youtube", "{input}");
+        assert!(Path::new(res["path"].as_str().unwrap()).starts_with(&dir));
+        let args: Vec<String> = std::fs::read_to_string(bin.join("args.txt"))
+            .unwrap()
+            .lines()
+            .map(String::from)
+            .collect();
+        assert_eq!(args.last().unwrap(), YOUTUBE, "{input}");
+        assert_eq!(args[args.len() - 2], "--");
+        assert!(args.contains(&"--no-playlist".to_string()));
+        // Video and sound are merged into one mp4, never more than 1080p.
+        let f = args.iter().position(|a| a == "-f").unwrap();
+        assert!(args[f + 1].contains("height<=?1080"), "{}", args[f + 1]);
+        assert!(args.contains(&"--merge-output-format".to_string()));
+    }
+}
+
+#[test]
+fn a_live_stream_that_is_still_going_is_refused_not_downloaded_forever() {
+    let Some(h) = harness() else { return };
+    set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    std::fs::write(bin.join("live.txt"), "").unwrap();
+    let err = call(&h.win, "download_link", json!({ "url": YOUTUBE })).unwrap_err();
+    assert!(err.as_str().unwrap().contains("live stream"), "{err}");
+    let args = std::fs::read_to_string(bin.join("args.txt")).unwrap();
+    assert!(args.contains("!is_live"), "{args}");
+    // The slot is free again.
+    std::fs::remove_file(bin.join("live.txt")).unwrap();
+    assert!(call(&h.win, "download_link", json!({ "url": YOUTUBE })).is_ok());
+}
+
+#[test]
+fn progress_does_not_jump_back_when_the_sound_starts_downloading() {
+    let Some(h) = harness() else { return };
+    set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    std::fs::write(bin.join("two-streams.txt"), "").unwrap();
+    let progress = collect_progress(&h);
+    call(&h.win, "download_link", json!({ "url": YOUTUBE })).unwrap();
+    let p = progress.lock().unwrap().clone();
+    assert!(p.contains(&0.5) && p.contains(&1.0), "{p:?}");
+    assert!(
+        p.windows(2).all(|w| w[1] >= w[0] - 1e-9),
+        "progress went backwards: {p:?}"
+    );
+}
+
+#[test]
+fn youtube_errors_are_explained_with_what_to_do() {
+    let Some(h) = harness() else { return };
+    set_download_dir(&h);
+    let bin = install_fake_ytdlp(&h);
+    for (stderr, wanted) in [
+        ("ERROR: [youtube] dQw4w9WgXcQ: Sign in to confirm you\u{2019}re not a bot. Use --cookies-from-browser or --cookies", "Settings"),
+        ("ERROR: [youtube] dQw4w9WgXcQ: Video unavailable. This video is not available", "unavailable"),
+        ("ERROR: [youtube] dQw4w9WgXcQ: Premieres in 3 hours", "hasn't started"),
+    ] {
+        std::fs::write(bin.join("fail.txt"), format!("{stderr}\n")).unwrap();
+        let err = call(&h.win, "download_link", json!({ "url": YOUTUBE })).unwrap_err();
+        let msg = err.as_str().unwrap();
+        assert!(msg.contains(wanted), "{stderr} -> {msg}");
+        assert!(!msg.contains("[youtube]"), "the technical prefix is gone: {msg}");
+    }
+}
+
+#[test]
+fn youtube_links_without_a_single_video_are_refused_before_any_work() {
+    let Some(h) = harness() else { return };
+    let bin = install_fake_ytdlp(&h);
+    for bad in [
+        "https://www.youtube.com/playlist?list=PLabc123",
+        "https://www.youtube.com/@someone",
+        "https://www.youtube.com/watch?v=short",
+    ] {
+        let err = call(&h.win, "download_link", json!({ "url": bad })).unwrap_err();
+        assert!(err.as_str().unwrap().contains("single video"), "{bad}: {err}");
+    }
+    assert!(!bin.join("args.txt").exists(), "yt-dlp was never started");
+}
+
 #[test]
 fn twitter_links_are_normalised_for_ytdlp() {
     let Some(h) = harness() else { return };
@@ -827,7 +933,13 @@ fn login_errors_are_explained_with_a_pointer_to_settings() {
 #[test]
 fn unsupported_and_empty_links_are_rejected_before_any_work() {
     let Some(h) = harness() else { return };
-    for bad in ["", "hello", "https://youtube.com/watch?v=1", "https://x.com/jack"] {
+    for bad in [
+        "",
+        "hello",
+        "https://vimeo.com/76979871",
+        "https://x.com/jack",
+        "https://www.youtube.com/playlist?list=PLabc123",
+    ] {
         let err = call(&h.win, "download_link", json!({ "url": bad })).unwrap_err();
         assert!(!err.as_str().unwrap().is_empty(), "{bad:?}");
     }

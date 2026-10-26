@@ -1,5 +1,5 @@
 /** Light client-side link detection, for the badge next to the input. The Rust side does the real parsing. */
-export type DetectedPlatform = "TikTok" | "Instagram" | "X / Twitter";
+export type DetectedPlatform = "TikTok" | "Instagram" | "X / Twitter" | "YouTube";
 
 export function detectPlatform(input: string): DetectedPlatform | null {
   const text = input.trim();
@@ -9,6 +9,7 @@ export function detectPlatform(input: string): DetectedPlatform | null {
   const host = match[1].toLowerCase().replace(/^(www|m|mobile)\./, "");
   if (host === "tiktok.com" || host.endsWith(".tiktok.com")) return "TikTok";
   if (host === "instagram.com") return "Instagram";
+  if (["youtube.com", "music.youtube.com", "youtube-nocookie.com", "youtu.be"].includes(host)) return "YouTube";
   if (["twitter.com", "x.com", "fxtwitter.com", "vxtwitter.com", "fixupx.com"].includes(host)) return "X / Twitter";
   return null;
 }

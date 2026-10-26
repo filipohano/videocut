@@ -420,7 +420,7 @@ mod tests {
             message(
                 43,
                 &format!(
-                    r#"look <a href="{TIKTOK}" target="_blank" rel="noopener">tiktok</a><br/><a href="https://t.me/my_links/41">earlier</a> and <a href="http://x.com/jack/status/20" target="_blank">x.com/jack/status/20</a> <a href="https://x.com/jack/status/20">again</a> <a href="https://youtube.com/watch?v=1">other</a><a class="tgme_widget_message_link_preview" href="{TIKTOK}"></a>"#
+                    r#"look <a href="{TIKTOK}" target="_blank" rel="noopener">tiktok</a><br/><a href="https://t.me/my_links/41">earlier</a> and <a href="http://x.com/jack/status/20" target="_blank">x.com/jack/status/20</a> <a href="https://x.com/jack/status/20">again</a> <a href="https://vimeo.com/76979871">other</a><a class="tgme_widget_message_link_preview" href="{TIKTOK}"></a>"#
                 ),
                 "2026-10-19T10:15:30+02:00"
             ),

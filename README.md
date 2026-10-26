@@ -2,7 +2,7 @@
 
 Download, crop, trim and watermark videos on your Mac or Windows PC — everything runs locally, powered by ffmpeg.
 
-- **Downloader** for **TikTok**, **Instagram** and **X/Twitter** links. TikTok comes in source quality
+- **Downloader** for **TikTok**, **Instagram**, **X/Twitter** and **YouTube** links. TikTok comes in source quality
   *without* the watermark (full links, `vt.tiktok.com` share links, or just the 19-digit post id), and TikTok
   **photo posts** are built into a 1080×1920 video with their sound (3 s per photo; a single photo with music lasts as long as the music, up to 60 s).
   **Instagram photo posts** work too: with music they become a 1080×1920 video of the photo(s) and the part of the
@@ -11,7 +11,11 @@ Download, crop, trim and watermark videos on your Mac or Windows PC — everythi
   browser (see below). **X/Twitter posts with photos** work too, at full size: one photo opens as a photo to edit,
   several are built into a 1080×1920 video (3 s per photo). Only public tweets: Twitter doesn't show the pictures
   of deleted, protected or sensitive ones without a login.
-- **Telegram queue.** Share TikTok, Instagram and X links from your phone to a Telegram channel of your own, and
+- **YouTube** videos, Shorts and past live streams (`youtube.com/watch`, `youtu.be`, `/shorts/`, `/live/`, YouTube
+  Music links) download as an H.264 mp4 with sound, up to 1080p. A video inside a playlist link is just that video;
+  playlists and channels aren't downloaded. A live stream that hasn't ended yet is refused instead of downloading
+  forever.
+- **Telegram queue.** Share TikTok, Instagram, X and YouTube links from your phone to a Telegram channel of your own, and
   they wait in a queue on the start screen: one tap opens one for editing. The app reads the channel when it
   launches and every 30 minutes while it's open (**Refresh** reads it at once and starts the 30 minutes over).
   Everyone uses their own channel, so your links only ever reach your own copy of the app. No bot and no
@@ -78,6 +82,10 @@ refreshed in the background at launch (toggle in Settings → Downloads), becaus
 - **Instagram** (and some X posts) need you to be logged in. In *Settings → Downloads* choose the browser you're
   logged into; yt-dlp reads its cookies locally and nothing is sent anywhere else. Safari additionally needs
   *Full Disk Access* for FillernCut (System Settings → Privacy & Security).
+- **YouTube** is the site that changes the most, which is why the downloader is refreshed at every launch (Settings →
+  Downloads). Some connections (VPNs, shared networks) are asked by YouTube to "confirm you're not a bot", and
+  age-restricted videos need a login: choose your browser in Settings → Downloads, as for Instagram, and try again.
+  Downloads are limited to 1080p because above that YouTube only has VP9/AV1, which are huge and slow to edit.
 - **TikTok** uses a third-party watermark-free API first (original quality, photo posts) and falls back to yt-dlp
   for plain videos. If that service is down, ordinary videos still work through yt-dlp.
 - Only download content you have the right to use.
@@ -93,7 +101,7 @@ Collect links on your phone and open them on your computer, without copying anyt
 1. In Telegram, create a channel (*New Channel*) and make it **Public** with a username of your own, for example
    `my_links` (*Channel settings → Channel type → Public*).
 2. In FillernCut, under **Telegram queue**, type that username and press **Save**.
-3. On your phone, share TikTok, Instagram and X links to the channel (*Share → Telegram → your channel*, or just
+3. On your phone, share TikTok, Instagram, X and YouTube links to the channel (*Share → Telegram → your channel*, or just
    paste them there).
 
 They appear in the queue on the start screen; tap one to download it and open it in the editor.
