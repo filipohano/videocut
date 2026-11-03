@@ -2,9 +2,10 @@ import { fileManager } from "../lib/platform";
 import { save } from "@tauri-apps/plugin-dialog";
 import { CANCELLED, api, errorMessage } from "../api";
 import { basename } from "../lib/format";
-import { buildExportSpec } from "../lib/spec";
+import { buildExportSpec, exportedFrame } from "../lib/spec";
 import { withProgress } from "../progress";
 import { store } from "../store";
+import { textOverlaySpecs } from "../textExport";
 import { isDirty, markClean, onUndoChange } from "../undo";
 import { flushTextSaves } from "../watermarkOps";
 import { $ } from "./dom";
@@ -63,7 +64,10 @@ export function initExportBar(): void {
     try {
       // Edited text watermarks must be on disk before ffmpeg reads them.
       await flushTextSaves();
-      const saved = await withProgress("export", bar, label, () => api.exportVideo(buildExportSpec(v, output!)), v.info.isImage ? "Saving…" : "Exporting…");
+      // Text boxes are drawn here, at the size of the exported picture, and burned in on top.
+      const spec = buildExportSpec(v, output!);
+      spec.watermarks.push(...(await textOverlaySpecs(v.texts, exportedFrame(spec))));
+      const saved = await withProgress("export", bar, label, () => api.exportVideo(spec), v.info.isImage ? "Saving…" : "Exporting…");
       markClean();
       finished = true;
       toast(`Saved ${basename(saved)}`, {

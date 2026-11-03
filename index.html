@@ -70,7 +70,7 @@
             </p>
           </div>
 
-          <div id="queue-card" class="card queue-card"></div>
+          <div id="queue-card" class="queue-columns"></div>
         </section>
 
         <!-- EDITOR -->
@@ -84,6 +84,7 @@
                   <div id="crop-dim" class="crop-dim"></div>
                   <div id="crop-frame" class="crop-frame"><i></i><i></i><i></i><i></i></div>
                   <div id="wm-layer" class="wm-layer"></div>
+                  <div id="text-layer" class="wm-layer text-layer"></div>
                   <div id="handle-layer" class="handle-layer"></div>
                 </div>
               </div>
@@ -147,6 +148,21 @@
                   <span class="muted small">Your library is saved and available every time you open the app.</span>
                 </div>
                 <div id="wm-active" class="wm-active"></div>
+              </section>
+
+              <section class="card" id="panel-text">
+                <h2 class="section-title">Text</h2>
+                <div class="wm-toolbar">
+                  <button id="text-add" class="btn primary">Add text</button>
+                  <div class="menu-host">
+                    <button id="text-styles-btn" class="btn" aria-haspopup="true" aria-expanded="false">
+                      Styles <span aria-hidden="true">▾</span>
+                    </button>
+                    <div id="text-styles-menu" class="menu hidden" role="menu"></div>
+                  </div>
+                  <span class="muted small">Put new text on top of the video, for example to cover a caption.</span>
+                </div>
+                <div id="text-active" class="wm-active"></div>
               </section>
 
               <section class="card" id="panel-output">

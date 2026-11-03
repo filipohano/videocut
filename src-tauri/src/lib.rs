@@ -8,6 +8,7 @@ mod library;
 mod queue;
 mod settings;
 mod state;
+mod text;
 
 pub use state::AppState;
 #[cfg(not(windows))]
@@ -44,6 +45,10 @@ pub fn register_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         queue::queue_set_channel,
         queue::queue_remove,
         queue::queue_disconnect,
+        text::save_text_image,
+        text::text_presets_list,
+        text::text_presets_save,
+        text::text_presets_remove,
         settings::get_settings,
         settings::save_settings,
         settings::ytdlp_version,
@@ -159,6 +164,7 @@ pub fn run() {
 
             editor::prune_preview_cache(&cache_dir);
             dirs::clear_downloads(&cache_dir);
+            text::clear_text_images(&cache_dir);
 
             // Fetch the downloader on first launch, and (setting-controlled) refresh
             // it in the background every launch: Instagram / X / TikTok break it often.

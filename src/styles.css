@@ -1,3 +1,19 @@
+/* TikTok Sans (SIL Open Font License 1.1, see src/assets/fonts/OFL.txt): the font of the Text section. */
+@font-face {
+  font-family: "TikTok Sans";
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url("./assets/fonts/TikTokSans-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "TikTok Sans";
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url("./assets/fonts/TikTokSans-Bold.woff2") format("woff2");
+}
+
 :root {
   --bg: #0f1014;
   --panel: #17181d;
@@ -555,6 +571,40 @@ body.dragging .dropzone {
   z-index: 4;
 }
 
+/* text boxes on the preview */
+.text-box {
+  position: absolute;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+}
+.text-box.dragging {
+  cursor: grabbing;
+}
+.text-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+/* The outline hugs the block, not the transparent room around it. */
+.text-outline {
+  position: absolute;
+  pointer-events: none;
+  outline: 1px dashed transparent;
+  outline-offset: 2px;
+}
+.text-box:hover .text-outline {
+  outline-color: rgb(255 255 255 / 0.5);
+}
+.text-box.selected .text-outline {
+  outline-color: rgb(255 255 255 / 0.9);
+}
+/* a text with no words yet is only an outline */
+.text-box.empty .text-outline {
+  outline-color: rgb(255 255 255 / 0.6);
+}
+
 /* player bar */
 .player {
   display: flex;
@@ -1093,6 +1143,113 @@ input.color {
   margin-left: auto;
 }
 
+/* text panel */
+.color-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.field-label {
+  flex: none;
+  width: 76px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.swatches {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.swatch {
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+  position: relative;
+}
+.swatch:hover {
+  transform: scale(1.1);
+}
+.swatch.selected {
+  box-shadow: 0 0 0 2px var(--panel-2), 0 0 0 4px var(--accent);
+}
+/* "no background": an empty circle with a slash through it */
+.swatch.none {
+  background: var(--field);
+}
+.swatch.none::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 2px;
+  height: 26px;
+  background: var(--danger);
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.swatch:focus-visible,
+.btn.toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.text-size {
+  display: grid;
+  grid-template-columns: 76px 1fr 36px;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+.text-size output {
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.text-row .grow {
+  flex: 1;
+}
+.save-style {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.style-name {
+  flex: 1;
+  min-width: 0;
+  background: var(--field);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font: inherit;
+  outline: none;
+}
+.style-name:focus {
+  border-color: var(--accent);
+}
+.hint-text {
+  margin: 0;
+}
+.style-sample {
+  flex: none;
+  width: 38px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-family: "TikTok Sans", sans-serif;
+  font-size: 15px;
+}
+#text-active .text-input {
+  font-family: "TikTok Sans", inherit;
+}
+
 .folder {
   display: grid;
   gap: 4px;
@@ -1353,6 +1510,21 @@ body.is-photo #panel-trim {
 }
 
 /* ───────── Telegram queue ───────── */
+/* Two columns side by side, one per channel; they stack on a narrow window. */
+.queue-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 760px) {
+  .queue-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.queue-col {
+  min-width: 0;
+}
 .queue-head {
   display: flex;
   align-items: center;
@@ -1363,9 +1535,24 @@ body.is-photo #panel-trim {
 .queue-head .section-title {
   margin: 0;
 }
-.queue-head .grow,
-.queue-foot .grow {
+.queue-title {
+  margin: 0;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.queue-title.muted {
+  font-weight: 500;
+}
+.queue-head .grow {
   flex: 1;
+}
+.queue-head .btn,
+.queue-head .small {
+  flex: none;
 }
 .queue-note {
   margin: 0 0 10px;
@@ -1403,6 +1590,7 @@ body.is-photo #panel-trim {
 }
 .queue-item .badge {
   margin-right: 0;
+  flex: none;
 }
 .queue-link {
   flex: 1;
@@ -1411,17 +1599,23 @@ body.is-photo #panel-trim {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.queue-age {
+  flex: none;
+  white-space: nowrap;
+}
 .queue-foot {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 10px;
 }
-.queue-steps {
-  margin: 0 0 12px;
-  padding-left: 20px;
+.queue-col.empty {
+  border-style: dashed;
+  background: transparent;
+}
+.queue-setting {
   display: grid;
-  gap: 4px;
+  gap: 6px;
 }
 .queue-form {
   display: flex;
@@ -1432,6 +1626,6 @@ body.is-photo #panel-trim {
   flex: 1;
   min-width: 0;
 }
-.queue-error {
-  margin: 8px 0 0;
+.queue-status {
+  margin: 0;
 }

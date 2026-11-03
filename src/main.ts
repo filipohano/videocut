@@ -8,6 +8,8 @@ import { chooseAndOpen, initSession, newMedia, openVideo } from "./session";
 import { store } from "./store";
 import { canRedo, canUndo, initUndo, onUndoChange, redo, undo } from "./undo";
 import { initUpdateUi, launchCheck, launchGate } from "./updates";
+import { ensureTextFont } from "./lib/textRender";
+import { refreshTextStyles } from "./textOps";
 import { importWatermark, refreshLibrary } from "./watermarkOps";
 import { $ } from "./ui/dom";
 import { addToBatch, initBatchDialog, isBatchOpen, openBatch } from "./ui/batchDialog";
@@ -18,6 +20,7 @@ import { initSettingsDialog } from "./ui/settingsDialog";
 import { initStage } from "./ui/stage";
 import { initQueue } from "./ui/queue";
 import { initStart } from "./ui/start";
+import { initTextPanel } from "./ui/textPanel";
 import { shortcut } from "./lib/platform";
 import { toast } from "./ui/toast";
 import { initWatermarkPanel } from "./ui/watermarkPanel";
@@ -28,8 +31,9 @@ async function boot(): Promise<void> {
     await import("./dev/mockTauri");
   }
 
-  const [settings, info] = await Promise.all([api.getSettings(), api.appInfo()]);
+  const [settings, info, queue] = await Promise.all([api.getSettings(), api.appInfo(), api.queueGet().catch(() => [])]);
   store.settings = settings;
+  store.queue = queue;
   store.appVersion = info.version;
   store.encoder = info.encoder;
   store.encoders = info.encoders;
@@ -42,6 +46,9 @@ async function boot(): Promise<void> {
   await launchGate();
 
   await refreshLibrary().catch((e) => console.warn("library", e));
+  await refreshTextStyles().catch((e) => console.warn("text styles", e));
+  // The text font loads in the background; text is drawn again once it is there.
+  void ensureTextFont();
   await startProgressRouter();
 
   const stage = initStage();
@@ -51,6 +58,7 @@ async function boot(): Promise<void> {
   initCropPanel();
   initTrimPanel(stage);
   initWatermarkPanel();
+  initTextPanel();
   initOutputPanel();
   initExportBar();
   initSettingsDialog();

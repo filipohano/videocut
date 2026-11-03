@@ -1,5 +1,7 @@
-/** The Telegram queue on the start screen: links posted to your own Telegram channel wait here, one tap opens them. */
-import { ask } from "@tauri-apps/plugin-dialog";
+/**
+ * The Telegram queue on the start screen: links posted to your own Telegram channels wait here,
+ * one tap opens them. Two columns, one per channel; the channels are set in Settings.
+ */
 import { api, errorMessage, type QueueItem, type QueueView } from "../api";
 import { RefreshTimer, shortLink, timeAgo } from "../lib/queue";
 import { store } from "../store";
@@ -8,234 +10,180 @@ import { toast } from "./toast";
 
 const PLATFORM_NAMES: Record<string, string> = { tiktok: "TikTok", instagram: "Instagram", twitter: "X", youtube: "YouTube" };
 
+/** The queue has this many columns (the same number the backend keeps). */
+export const QUEUE_SLOTS = 2;
+export const COLUMN_NAMES = ["Left column", "Right column"];
+
 const startVisible = () => !$("#view-start").classList.contains("hidden");
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 export function initQueue(fetchLink: (url: string) => Promise<boolean>): void {
-  const card = $("#queue-card");
-  let view: QueueView | null = null;
-  /** Why the last refresh failed, if it did. */
-  let failure: string | null = null;
-  let refreshing = false;
-  /** The channel form is showing although a channel is already set ("Change"). */
-  let changing = false;
-  let saving = false;
-  let formError: string | null = null;
-  let typed = "";
+  const root = $("#queue-card");
+  /** Why the last refresh of a column failed, if it did. */
+  const failure: (string | null)[] = Array.from({ length: QUEUE_SLOTS }, () => null);
+  const refreshing: boolean[] = Array.from({ length: QUEUE_SLOTS }, () => false);
+  /** The channel each column was reading when it was last drawn: a change restarts its countdown. */
+  const lastChannel: (string | null)[] = Array.from({ length: QUEUE_SLOTS }, () => null);
 
-  const timer = new RefreshTimer(() => refresh(true));
+  /** Every column has its own countdown: pressing one's Refresh doesn't postpone the other's. */
+  const timers = Array.from({ length: QUEUE_SLOTS }, (_, slot) => new RefreshTimer(() => refresh(slot, true)));
 
-  /** Fetch new links. `auto` is the 30-minute / launch refresh: quiet unless something arrives. */
-  async function refresh(auto: boolean): Promise<void> {
-    if (!view?.channel) return; // nothing to read yet
-    refreshing = true;
+  const column = (slot: number): QueueView | undefined => store.queue[slot];
+
+  function setColumn(view: QueueView): void {
+    store.queue[view.slot] = view;
+    store.emit("queue");
+  }
+
+  /** Fetch new links for one column. `auto` is the 30-minute / launch refresh: quiet unless something arrives. */
+  async function refresh(slot: number, auto: boolean): Promise<void> {
+    if (!column(slot)?.channel) return; // nothing to read yet
+    refreshing[slot] = true;
     render();
     try {
-      const result = await api.queueRefresh();
-      failure = null;
-      view = result.view;
+      const result = await api.queueRefresh(slot);
+      failure[slot] = null;
+      store.queue[slot] = result.view;
       if (result.added > 0 && !startVisible()) {
-        toast(`${plural(result.added, "new link", "new links")} in your Telegram queue`, { kind: "success" });
+        toast(`${plural(result.added, "new link", "new links")} from @${result.view.channel}`, { kind: "success" });
       }
     } catch (e) {
-      failure = errorMessage(e);
-      if (!auto) toast(failure, { kind: "error" });
+      failure[slot] = errorMessage(e);
+      if (!auto) toast(failure[slot]!, { kind: "error" });
     } finally {
-      refreshing = false;
+      refreshing[slot] = false;
       render();
     }
   }
 
-  async function saveChannel(): Promise<void> {
-    if (saving) return;
-    saving = true;
-    formError = null;
-    render();
-    try {
-      const result = await api.queueSetChannel(typed);
-      view = result.view;
-      failure = null;
-      changing = false;
-      typed = "";
-      toast(
-        result.added > 0
-          ? `Found ${plural(result.added, "link", "links")} in t.me/${result.view.channel}`
-          : `Reading t.me/${result.view.channel}. Links you post there show up here.`,
-        { kind: "success" },
-      );
-      // The channel was just read, so the next automatic refresh is a full period away.
-      void timer.runNow(async () => {});
-    } catch (e) {
-      formError = errorMessage(e);
-    } finally {
-      saving = false;
-      render();
-    }
-  }
-
-  async function openItem(item: QueueItem): Promise<void> {
+  async function openItem(slot: number, item: QueueItem): Promise<void> {
     if (store.busy) return;
     // Only an item that really opened leaves the queue; if it failed it stays to try again.
-    if (await fetchLink(item.url)) {
-      try {
-        view = await api.queueRemove(item.id);
-        render();
-      } catch (e) {
-        toast(errorMessage(e), { kind: "error" });
-      }
-    }
+    if (await fetchLink(item.url)) await dismiss(slot, item);
   }
 
-  async function dismiss(item: QueueItem): Promise<void> {
+  async function dismiss(slot: number, item: QueueItem): Promise<void> {
     try {
-      view = await api.queueRemove(item.id);
-      render();
+      setColumn(await api.queueRemove(slot, item.id));
     } catch (e) {
       toast(errorMessage(e), { kind: "error" });
     }
   }
 
-  async function disconnect(): Promise<void> {
-    const sure = await ask("Stop reading the channel? Links still waiting in the queue are removed. The channel itself isn't touched.", {
-      title: "Disconnect Telegram",
-      kind: "warning",
-    });
-    if (!sure) return;
-    try {
-      view = await api.queueDisconnect();
-      failure = null;
-      changing = false;
-      render();
-    } catch (e) {
-      toast(errorMessage(e), { kind: "error" });
-    }
-  }
-
-  // ───────── drawing the card ─────────
-  function row(item: QueueItem): HTMLElement {
+  // ───────── drawing ─────────
+  function row(slot: number, item: QueueItem): HTMLElement {
     return h(
       "div",
       { class: "queue-row" },
       h(
         "button",
-        { class: "queue-item", disabled: store.busy, title: item.url, onclick: () => void openItem(item) },
+        { class: "queue-item", disabled: store.busy, title: item.url, onclick: () => void openItem(slot, item) },
         h("span", { class: "badge" }, PLATFORM_NAMES[item.platform] ?? item.platform),
         h("span", { class: "queue-link" }, shortLink(item.url)),
-        h("span", { class: "muted small" }, timeAgo(item.addedAt)),
+        h("span", { class: "muted small queue-age" }, timeAgo(item.addedAt)),
       ),
-      h("button", { class: "icon-btn", title: "Remove from the queue", "aria-label": "Remove from the queue", onclick: () => void dismiss(item) }, "×"),
+      h("button", { class: "icon-btn", title: "Remove from the queue", "aria-label": "Remove from the queue", onclick: () => void dismiss(slot, item) }, "×"),
     );
   }
 
-  function channelForm(v: QueueView): HTMLElement[] {
-    const input = h("input", {
-      type: "text",
-      spellcheck: false,
-      autocapitalize: "off",
-      autocorrect: "off",
-      placeholder: "@my_links",
-      "aria-label": "Telegram channel name",
-      value: typed,
-      disabled: saving,
-      oninput: (e: Event) => (typed = (e.target as HTMLInputElement).value),
-    }) as HTMLInputElement;
-    const form = h(
-      "form",
-      { class: "queue-form", autocomplete: "off" },
-      input,
-      h("button", { class: "btn primary", type: "submit", disabled: saving }, saving ? "Checking…" : "Save"),
-      v.channel &&
-        h("button", { class: "btn", type: "button", disabled: saving, onclick: () => { changing = false; formError = null; typed = ""; render(); } }, "Cancel"),
+  const openSettings = () => $("#btn-settings").click();
+
+  function emptyColumn(slot: number): HTMLElement {
+    return h(
+      "section",
+      { class: "card queue-col empty", "data-slot": String(slot) },
+      h("div", { class: "queue-head" }, h("h2", { class: "queue-title muted" }, COLUMN_NAMES[slot])),
+      h("p", { class: "muted small queue-note" }, "No channel yet. Add a second Telegram channel to collect more links here."),
+      h("div", {}, h("button", { class: "btn small", onclick: openSettings }, "Choose a channel in Settings")),
     );
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      void saveChannel();
-    });
-    return [
-      h(
-        "ol",
-        { class: "queue-steps muted small" },
-        h("li", {}, "In Telegram, create a channel and make it ", h("strong", {}, "Public"), " with a username (Channel settings → Channel type)."),
-        h("li", {}, "Type that username here."),
-        h("li", {}, "From your phone, share TikTok, Instagram, X and YouTube links to the channel. They wait here: tap one to open it."),
-      ),
-      form,
-      formError && h("p", { class: "small status-err queue-error", role: "alert" }, formError),
-      h(
-        "p",
-        { class: "muted small queue-error" },
-        "A public channel can be read by anyone who knows its name. Pick a name nobody would guess, and only post links there. FillernCut reads it straight from your computer: no other server is involved.",
-      ),
-    ].filter(Boolean) as HTMLElement[];
   }
 
-  function render(): void {
-    if (!view) return;
-    const v = view;
-    const parts: (HTMLElement | false)[] = [];
-    const showForm = !v.channel || changing;
-
-    const status = failure
-      ? h("span", { class: "small status-warn", title: failure }, "Couldn't refresh")
+  function filledColumn(slot: number, v: QueueView): HTMLElement {
+    const status = failure[slot]
+      ? h("span", { class: "small status-warn", title: failure[slot]! }, "Couldn't refresh")
       : v.lastRefreshed
         ? h("span", { class: "small muted" }, `Updated ${new Date(v.lastRefreshed * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`)
         : null;
-    parts.push(
+    return h(
+      "section",
+      { class: "card queue-col", "data-slot": String(slot) },
       h(
         "div",
         { class: "queue-head" },
-        h("h2", { class: "section-title" }, "Telegram queue"),
+        h("h2", { class: "queue-title", title: `t.me/${v.channel}` }, `@${v.channel}`),
         h("span", { class: "grow" }),
-        v.channel && !showForm && status,
-        v.channel &&
-          !showForm &&
-          h("button", { class: "btn small", disabled: refreshing || store.busy, onclick: () => void timer.runNow(() => refresh(false)) }, refreshing ? "Refreshing…" : "Refresh"),
+        status,
+        h(
+          "button",
+          { class: "btn small", disabled: refreshing[slot] || store.busy, onclick: () => void timers[slot].runNow(() => refresh(slot, false)) },
+          refreshing[slot] ? "Refreshing…" : "Refresh",
+        ),
+      ),
+      v.items.length > 0
+        ? h("div", { class: "queue-list" }, ...v.items.map((item) => row(slot, item)))
+        : h("p", { class: "muted small queue-note" }, "Nothing waiting. Post a link in the channel and it shows up here."),
+      failure[slot] ? h("p", { class: "small status-warn queue-note" }, failure[slot]!) : null,
+      h(
+        "div",
+        { class: "queue-foot" },
+        h("button", { class: "btn small", onclick: () => void api.openUrl(`https://t.me/${v.channel}`).catch(() => {}) }, "Open the channel"),
       ),
     );
-
-    if (showForm) {
-      parts.push(...(channelForm(v) as HTMLElement[]));
-    } else {
-      parts.push(
-        v.items.length > 0
-          ? h("div", { class: "queue-list" }, ...v.items.map(row))
-          : h("p", { class: "muted small queue-note" }, "Nothing waiting. Post a link in your channel and it shows up here."),
-        failure ? h("p", { class: "small status-warn queue-note" }, failure) : false,
-        h(
-          "div",
-          { class: "queue-foot" },
-          h("span", { class: "muted small grow" }, `Reading t.me/${v.channel}`),
-          h("button", { class: "btn small", onclick: () => void api.openUrl(`https://t.me/${v.channel}`).catch(() => {}) }, "Open the channel"),
-          h("button", { class: "btn small", onclick: () => { changing = true; typed = v.channel ?? ""; formError = null; render(); } }, "Change"),
-          h("button", { class: "btn small danger", onclick: () => void disconnect() }, "Disconnect"),
-        ),
-      );
-    }
-    // A redraw (a refresh finishing, the busy flag) must not take the cursor from the channel field.
-    const before = card.querySelector<HTMLInputElement>(".queue-form input");
-    const typing = before !== null && document.activeElement === before;
-    const selection = typing ? [before.selectionStart, before.selectionEnd] : null;
-    card.replaceChildren(...(parts.filter(Boolean) as HTMLElement[]));
-    const after = card.querySelector<HTMLInputElement>(".queue-form input");
-    if (after && selection) {
-      after.focus();
-      after.setSelectionRange(selection[0], selection[1]);
-    }
   }
 
-  // From disk straight away, then Telegram: at launch and every 30 minutes while the app is open.
-  void api
-    .queueGet()
-    .then((v) => {
-      view = v;
-      render();
-    })
-    .catch(() => {})
-    .finally(() => void timer.start());
+  function render(): void {
+    const views = Array.from({ length: QUEUE_SLOTS }, (_, slot) => column(slot));
+    if (store.queue.length === 0) return; // not loaded yet
+    if (views.every((v) => !v?.channel)) {
+      // Nothing set up yet: one explanation instead of two empty boxes.
+      root.className = "queue-intro";
+      root.replaceChildren(
+        h(
+          "section",
+          { class: "card queue-col intro" },
+          h("div", { class: "queue-head" }, h("h2", { class: "section-title" }, "Telegram queue")),
+          h(
+            "p",
+            { class: "muted small queue-note" },
+            "Share TikTok, Instagram, X and YouTube links from your phone to a public Telegram channel of your own, and they wait here: tap one to open it. You can read two channels side by side.",
+          ),
+          h("div", {}, h("button", { class: "btn primary", onclick: openSettings }, "Set up in Settings")),
+        ),
+      );
+      return;
+    }
+    root.className = "queue-columns";
+    root.replaceChildren(...views.map((v, slot) => (v?.channel ? filledColumn(slot, v) : emptyColumn(slot))));
+  }
 
+  /** A channel was set, changed or removed (in Settings): restart or stop that column's countdown. */
+  function channelsChanged(): void {
+    for (let slot = 0; slot < QUEUE_SLOTS; slot++) {
+      const channel = column(slot)?.channel ?? null;
+      if (channel === lastChannel[slot]) continue;
+      lastChannel[slot] = channel;
+      failure[slot] = null;
+      // The channel was just read when it was set, so the next refresh is a full period away.
+      if (channel) timers[slot].arm();
+      else timers[slot].stop();
+    }
+    render();
+  }
+
+  // The queues were loaded at launch (from disk); then read from Telegram: at launch and every
+  // 30 minutes while the app is open.
+  for (let slot = 0; slot < QUEUE_SLOTS; slot++) {
+    const channel = column(slot)?.channel ?? null;
+    lastChannel[slot] = channel;
+    if (channel) void timers[slot].start();
+  }
+  render();
+
+  store.on("queue", channelsChanged);
   store.on("busy", render);
   // "5 min ago" stays right, and a refresh that was missed while the computer slept is made up for.
   setInterval(render, 60_000);
-  window.addEventListener("focus", () => timer.catchUp());
-  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && timer.catchUp());
+  const catchUp = () => timers.forEach((t) => t.catchUp());
+  window.addEventListener("focus", catchUp);
+  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && catchUp());
 }

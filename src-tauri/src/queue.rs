@@ -1,8 +1,8 @@
-//! The Telegram queue: the app reads a public Telegram channel of the user's own
-//! (`https://t.me/s/<name>`) and queues the TikTok/Instagram/X links posted there.
-//! See `fillerncut_core::queue`.
+//! The Telegram queue: the app reads up to two public Telegram channels of the user's own
+//! (`https://t.me/s/<name>`), one per column, and queues the TikTok/Instagram/X/YouTube links
+//! posted there. See `fillerncut_core::queue`.
 
-use fillerncut_core::queue::{parse_channel, parse_channel_page, ChannelPost, QueueItem};
+use fillerncut_core::queue::{parse_channel, parse_channel_page, ChannelPost, QueueItem, SLOTS};
 use serde::Serialize;
 use std::time::Duration;
 use tauri::State;
@@ -10,7 +10,19 @@ use tauri::State;
 use crate::download::USER_AGENT;
 use crate::state::AppState;
 
-const JOB: &str = "queue";
+/// Each column has its own job name, so two columns can be refreshed at the same time.
+fn job(slot: usize) -> String {
+    format!("queue-{slot}")
+}
+
+/// A column number from the page; anything but a real column is an error, not a panic.
+fn check_slot(slot: usize) -> Result<usize, String> {
+    if slot < SLOTS {
+        Ok(slot)
+    } else {
+        Err(format!("There are only {SLOTS} columns"))
+    }
+}
 /// A page holds the newest ~20 posts. A refresh reads back until it reaches posts it has
 /// already seen, but never more than this many pages, however long the app was closed.
 const MAX_PAGES: usize = 5;
@@ -23,6 +35,8 @@ const FIRST_LOOK_PAGES: usize = 3;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueView {
+    /// Which column this is.
+    slot: usize,
     channel: Option<String>,
     items: Vec<QueueItem>,
     last_refreshed: Option<i64>,
@@ -36,9 +50,10 @@ pub struct RefreshResult {
     added: usize,
 }
 
-fn view(state: &AppState) -> QueueView {
-    let q = state.queue.snapshot();
+fn view(state: &AppState, slot: usize) -> QueueView {
+    let q = state.queue.snapshot(slot);
     QueueView {
+        slot,
         channel: q.channel,
         items: q.items,
         last_refreshed: q.last_refreshed,
@@ -109,25 +124,48 @@ fn newest(mut posts: Vec<ChannelPost>, count: usize) -> Vec<ChannelPost> {
     posts.split_off(skip)
 }
 
-/// What is in the queue now, from disk. No network.
+/// What is in the queues now, from disk. No network.
 #[tauri::command]
-pub fn queue_get(state: State<'_, AppState>) -> QueueView {
-    view(&state)
+pub fn queue_get(state: State<'_, AppState>) -> Vec<QueueView> {
+    (0..SLOTS).map(|slot| view(&state, slot)).collect()
 }
 
-/// Read a channel and start using it. A channel that can't be read isn't saved.
+/// Read a channel and start using it in a column. A channel that can't be read isn't saved.
 #[tauri::command]
-pub async fn queue_set_channel(state: State<'_, AppState>, input: String) -> Result<RefreshResult, String> {
-    let channel = parse_channel(&input).map_err(|e| e.to_string())?;
-    let Ok(_guard) = state.begin_job(JOB) else {
-        return Err("The queue is being updated. Try again in a moment.".into());
+pub async fn queue_set_channel(
+    state: State<'_, AppState>,
+    slot: usize,
+    input: String,
+) -> Result<RefreshResult, String> {
+    let slot = check_slot(slot)?;
+    let mut channel = parse_channel(&input).map_err(|e| e.to_string())?;
+    // Telegram doesn't care about capitals, so neither do we: the same name is the same channel.
+    let current = state.queue.snapshot(slot).channel;
+    if let Some(existing) = current.as_deref().filter(|c| c.eq_ignore_ascii_case(&channel)) {
+        channel = existing.to_string();
+    }
+    for other in (0..SLOTS).filter(|o| *o != slot) {
+        if state
+            .queue
+            .snapshot(other)
+            .channel
+            .is_some_and(|c| c.eq_ignore_ascii_case(&channel))
+        {
+            return Err(format!(
+                "t.me/{channel} is already in the {} column. Each column needs its own channel.",
+                column_name(other)
+            ));
+        }
+    }
+    let Ok(_guard) = state.begin_job(&job(slot)) else {
+        return Err("This column is being updated. Try again in a moment.".into());
     };
     // Looking at a channel for the first time picks up its newest posts only.
-    let first_look = state.queue.snapshot().channel.as_deref() != Some(channel.as_str());
+    let first_look = current.as_deref() != Some(channel.as_str());
     let already_read = if first_look {
         0
     } else {
-        state.queue.snapshot().seen_up_to()
+        state.queue.snapshot(slot).seen_up_to()
     };
     let pages = if first_look { FIRST_LOOK_PAGES } else { MAX_PAGES };
     let mut posts = fetch_posts(&channel, already_read, pages).await?;
@@ -136,31 +174,32 @@ pub async fn queue_set_channel(state: State<'_, AppState>, input: String) -> Res
     }
     let added = state
         .queue
-        .update(|q| {
+        .update(slot, |q| {
             q.set_channel(&channel);
             q.apply_posts(posts, now_unix())
         })
         .map_err(|e| format!("Couldn't save the queue: {e}"))?;
     Ok(RefreshResult {
-        view: view(&state),
+        view: view(&state, slot),
         added,
     })
 }
 
-/// Pick up the links posted since last time. Does nothing until a channel is set.
+/// Pick up the links posted since last time in one column. Does nothing until it has a channel.
 #[tauri::command]
-pub async fn queue_refresh(state: State<'_, AppState>) -> Result<RefreshResult, String> {
-    let snapshot = state.queue.snapshot();
+pub async fn queue_refresh(state: State<'_, AppState>, slot: usize) -> Result<RefreshResult, String> {
+    let slot = check_slot(slot)?;
+    let snapshot = state.queue.snapshot(slot);
     let Some(channel) = snapshot.channel.clone() else {
         return Ok(RefreshResult {
-            view: view(&state),
+            view: view(&state, slot),
             added: 0,
         });
     };
-    // Two refreshes at once (the timer and a click) would only repeat each other.
-    let Ok(_guard) = state.begin_job(JOB) else {
+    // Two refreshes of one column at once (the timer and a click) would only repeat each other.
+    let Ok(_guard) = state.begin_job(&job(slot)) else {
         return Ok(RefreshResult {
-            view: view(&state),
+            view: view(&state, slot),
             added: 0,
         });
     };
@@ -172,7 +211,7 @@ pub async fn queue_refresh(state: State<'_, AppState>) -> Result<RefreshResult, 
     }
     let added = state
         .queue
-        .update(|q| {
+        .update(slot, |q| {
             // The channel may have been changed while this was fetching.
             if q.channel.as_deref() == Some(channel.as_str()) {
                 q.apply_posts(posts, now_unix())
@@ -182,27 +221,38 @@ pub async fn queue_refresh(state: State<'_, AppState>) -> Result<RefreshResult, 
         })
         .map_err(|e| format!("Couldn't save the queue: {e}"))?;
     Ok(RefreshResult {
-        view: view(&state),
+        view: view(&state, slot),
         added,
     })
 }
 
-/// Take a link out of the queue (it was opened, or dismissed).
+/// Take a link out of a queue (it was opened, or dismissed).
 #[tauri::command]
-pub fn queue_remove(state: State<'_, AppState>, id: i64) -> Result<QueueView, String> {
+pub fn queue_remove(state: State<'_, AppState>, slot: usize, id: i64) -> Result<QueueView, String> {
+    let slot = check_slot(slot)?;
     state
         .queue
-        .update(|q| q.remove(id))
+        .update(slot, |q| q.remove(id))
         .map_err(|e| format!("Couldn't save the queue: {e}"))?;
-    Ok(view(&state))
+    Ok(view(&state, slot))
 }
 
-/// Stop reading the channel and forget its links. The channel itself isn't touched.
+/// Stop reading a column's channel and forget its links. The channel itself isn't touched.
 #[tauri::command]
-pub fn queue_disconnect(state: State<'_, AppState>) -> Result<QueueView, String> {
+pub fn queue_disconnect(state: State<'_, AppState>, slot: usize) -> Result<QueueView, String> {
+    let slot = check_slot(slot)?;
     state
         .queue
-        .update(|q| q.disconnect())
+        .update(slot, |q| q.disconnect())
         .map_err(|e| format!("Couldn't save the queue: {e}"))?;
-    Ok(view(&state))
+    Ok(view(&state, slot))
+}
+
+/// How a column is called in messages.
+fn column_name(slot: usize) -> &'static str {
+    if slot == 0 {
+        "left"
+    } else {
+        "right"
+    }
 }

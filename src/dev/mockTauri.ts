@@ -6,13 +6,15 @@
  * Sample media comes from `npm run dev:assets` (needs ffmpeg).
  * Query flags:  ?update=1  pretend a newer release exists
  *               ?mode=notify|manual  start with that update mode
- *               ?queue=items|empty  Telegram queue: a channel with links, or an empty
- *                 one (default: no channel yet; "my_links" works, "private_one" fails)
+ *               ?styles=some  start with a few saved text styles
+ *               ?queue=items|one|empty  Telegram queue: two columns with links, only the
+ *                 left one, or two without links (default: no channel yet; "my_links"
+ *                 works, "private_one" fails)
  */
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type { Channel } from "@tauri-apps/api/core";
-import type { MediaInfo, Settings, WatermarkEntry } from "../api";
+import type { MediaInfo, Settings, TextPreset, WatermarkEntry } from "../api";
 
 const params = new URLSearchParams(location.search);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -49,6 +51,14 @@ let library: WatermarkEntry[] = [
   entry("b", "@filippohano handle", "logo-b.png", 0.2, 0.05, 0.05, 0.3, 0.6),
 ];
 
+let textPresets: TextPreset[] = params.get("styles") === "some"
+  ? [
+      { id: "s1", name: "TikTok classic", style: { color: "#ffffff", background: "#000000", bold: true, align: "center", size: 7 } },
+      { id: "s2", name: "Yellow note", style: { color: "#000000", background: "#ffd60a", bold: true, align: "left", size: 6 } },
+      { id: "s3", name: "Plain white", style: { color: "#ffffff", background: null, bold: true, align: "center", size: 8 } },
+    ]
+  : [];
+
 let history = [
   { id: "h1", kind: "export", path: "/dev/sample.webm", createdAt: Math.floor(Date.now() / 1000) - 300, title: null, sourceUrl: null, platform: null, bytes: 1_200_000, duration: 9.7, exists: true, thumbPath: "/dev/logo-a.png" },
   { id: "h2", kind: "download", path: "/dev/sample.webm", createdAt: Math.floor(Date.now() / 1000) - 3600, title: "Funny cat", sourceUrl: "https://www.tiktok.com/@a/video/1234567890123456789", platform: "tiktok", bytes: 3_100_000, duration: null, exists: true, thumbPath: "/dev/logo-b.png" },
@@ -61,13 +71,18 @@ const sampleItems = [
   { id: 1, url: "https://www.instagram.com/reel/C1a2B3c4D5e", platform: "instagram", addedAt: nowSeconds() - 120 },
   { id: 2, url: "https://www.tiktok.com/@someone/video/7123456789012345678", platform: "tiktok", addedAt: nowSeconds() - 3 * 3600 },
   { id: 3, url: "https://x.com/jack/status/20", platform: "twitter", addedAt: nowSeconds() - 30 * 3600 },
+  { id: 4, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", platform: "youtube", addedAt: nowSeconds() - 2 * 86400 },
 ];
-const hasChannel = queueMode === "items" || queueMode === "empty";
-let queue = {
-  channel: hasChannel ? "my_links" : (null as string | null),
-  items: queueMode === "items" ? sampleItems : [],
-  lastRefreshed: null as number | null,
-};
+type MockColumn = { slot: number; channel: string | null; items: typeof sampleItems; lastRefreshed: number | null };
+const emptyColumn = (slot: number): MockColumn => ({ slot, channel: null, items: [], lastRefreshed: null });
+// ?queue=items: both columns have a channel; ?queue=one: only the left one; ?queue=empty: channels without links.
+const queue: MockColumn[] = [emptyColumn(0), emptyColumn(1)];
+if (queueMode === "items" || queueMode === "one" || queueMode === "empty") {
+  queue[0] = { slot: 0, channel: "my_links", items: queueMode === "empty" ? [] : sampleItems.slice(0, 3), lastRefreshed: nowSeconds() - 60 };
+}
+if (queueMode === "items" || queueMode === "empty") {
+  queue[1] = { slot: 1, channel: "work_clips", items: queueMode === "empty" ? [] : [sampleItems[3], { ...sampleItems[0], id: 9, url: "https://www.instagram.com/reel/Zx9Qw8ErTyU" }], lastRefreshed: nowSeconds() - 600 };
+}
 
 const cancelled = new Set<string>();
 
@@ -153,30 +168,52 @@ mockIPC(
         return library.find((e) => e.id === a.id);
       }
       case "export_video":
+        // Tests read back what would have been exported.
+        (window as unknown as { __lastExport?: unknown }).__lastExport = a.spec;
         await simulate("export", "Exporting…", 3000);
         return a.spec.output;
+      case "save_text_image": {
+        // The pictures of text boxes, kept so a test can look at what would be burned in.
+        const w = window as unknown as { __textImages?: string[] };
+        (w.__textImages ??= []).push(String(a.pngBase64));
+        return `/dev/texts/${w.__textImages.length}.png`;
+      }
+      case "text_presets_list":
+        return textPresets;
+      case "text_presets_save": {
+        const name = String(a.name).trim();
+        if (!name) throw "Give the style a name";
+        const saved = { id: crypto.randomUUID(), name, style: a.style };
+        textPresets = [...textPresets.filter((p) => p.name.toLowerCase() !== name.toLowerCase()), saved];
+        return saved;
+      }
+      case "text_presets_remove":
+        textPresets = textPresets.filter((p) => p.id !== a.id);
+        return null;
       case "download_link":
         await simulate("download", "Downloading…", 2400);
         return { path: "/dev/sample.webm", platform: "tiktok", title: null, note: null };
       case "queue_get":
         return queue;
       case "queue_refresh":
-        if (queue.channel) queue = { ...queue, lastRefreshed: nowSeconds() };
-        return { view: queue, added: 0 };
+        if (queue[a.slot].channel) queue[a.slot] = { ...queue[a.slot], lastRefreshed: nowSeconds() };
+        return { view: queue[a.slot], added: 0 };
       case "queue_set_channel": {
-        await sleep(600);
-        const name = String(a.input).trim().replace(/^@|^https?:\/\/t\.me\//, "");
+        await sleep(500);
+        const name = String(a.input).trim().replace(/^@|^https?:\/\/t\.me\/(s\/)?/, "");
         if (!/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(name)) throw "That isn't a Telegram channel name. It should look like @my_links or https://t.me/my_links (5–32 letters, digits or underscores).";
         if (name === "private_one") throw `Couldn't read any posts from t.me/${name}. The channel has to be public (it needs a username: Channel settings → Channel type → Public) and have at least one post.`;
-        queue = { channel: name, items: sampleItems.slice(0, 2), lastRefreshed: nowSeconds() };
-        return { view: queue, added: 2 };
+        const other = queue[1 - a.slot].channel;
+        if (other && other.toLowerCase() === name.toLowerCase()) throw `t.me/${name} is already in the ${a.slot === 0 ? "right" : "left"} column. Each column needs its own channel.`;
+        queue[a.slot] = { slot: a.slot, channel: name, items: sampleItems.slice(0, 2), lastRefreshed: nowSeconds() };
+        return { view: queue[a.slot], added: 2 };
       }
       case "queue_remove":
-        queue = { ...queue, items: queue.items.filter((i) => i.id !== a.id) };
-        return queue;
+        queue[a.slot] = { ...queue[a.slot], items: queue[a.slot].items.filter((i) => i.id !== a.id) };
+        return queue[a.slot];
       case "queue_disconnect":
-        queue = { channel: null, items: [], lastRefreshed: null };
-        return queue;
+        queue[a.slot] = emptyColumn(a.slot);
+        return queue[a.slot];
       case "history_list":
         return history;
       case "history_remove":

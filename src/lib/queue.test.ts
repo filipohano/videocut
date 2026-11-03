@@ -80,6 +80,27 @@ describe("RefreshTimer", () => {
     timer.stop();
   });
 
+  it("can be armed without running, and then refreshes after a full period", async () => {
+    const task = vi.fn(async () => {});
+    const timer = new RefreshTimer(task);
+    timer.arm();
+    expect(task).toHaveBeenCalledTimes(0);
+    await vi.advanceTimersByTimeAsync(REFRESH_EVERY_MS - 1);
+    expect(task).toHaveBeenCalledTimes(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(task).toHaveBeenCalledTimes(1);
+    // Arming again restarts the countdown.
+    await vi.advanceTimersByTimeAsync(20 * MIN);
+    timer.arm();
+    await vi.advanceTimersByTimeAsync(20 * MIN);
+    expect(task).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10 * MIN);
+    expect(task).toHaveBeenCalledTimes(2);
+    timer.stop();
+    await vi.advanceTimersByTimeAsync(2 * REFRESH_EVERY_MS);
+    expect(task).toHaveBeenCalledTimes(2);
+  });
+
   it("catches up when the window returns after the computer slept", async () => {
     const task = vi.fn(async () => {});
     const timer = new RefreshTimer(task);

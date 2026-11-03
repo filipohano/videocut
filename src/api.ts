@@ -103,7 +103,9 @@ export interface QueueItem {
 }
 
 export interface QueueView {
-  /** The Telegram channel being read, once one is set. */
+  /** Which column this is (0 = left, 1 = right). */
+  slot: number;
+  /** The Telegram channel this column reads, once one is set. */
   channel: string | null;
   items: QueueItem[];
   /** Unix seconds */
@@ -114,6 +116,23 @@ export interface QueueRefresh {
   view: QueueView;
   /** Links that weren't in the queue before. */
   added: number;
+}
+
+/** A picture burned into the video: a watermark, or the picture of a text box. */
+export interface OverlaySpec {
+  path: string;
+  nx: number;
+  ny: number;
+  scale: number;
+  opacity: number;
+  content: ContentBox;
+}
+
+/** A saved look for text boxes. */
+export interface TextPreset {
+  id: string;
+  name: string;
+  style: { color: string; background: string | null; bold: boolean; align: "left" | "center" | "right"; size: number };
 }
 
 export interface ExportSpec {
@@ -127,7 +146,8 @@ export interface ExportSpec {
   crop: { x: number; y: number; w: number; h: number } | null;
   trimStart: number | null;
   trimEnd: number | null;
-  watermarks: { path: string; nx: number; ny: number; scale: number; opacity: number; content: ContentBox }[];
+  /** Watermarks, then text boxes, drawn in this order. */
+  watermarks: OverlaySpec[];
   sourceBitrate: number | null;
   fps: number | null;
   /** set for photos: export a single JPG/PNG */
@@ -188,11 +208,11 @@ export const api = {
   downloadLink: (url: string) => invoke<DownloadResult>("download_link", { url }),
   discardDownload: (path: string) => invoke<boolean>("discard_download", { path }),
 
-  queueGet: () => invoke<QueueView>("queue_get"),
-  queueRefresh: () => invoke<QueueRefresh>("queue_refresh"),
-  queueSetChannel: (input: string) => invoke<QueueRefresh>("queue_set_channel", { input }),
-  queueRemove: (id: number) => invoke<QueueView>("queue_remove", { id }),
-  queueDisconnect: () => invoke<QueueView>("queue_disconnect"),
+  queueGet: () => invoke<QueueView[]>("queue_get"),
+  queueRefresh: (slot: number) => invoke<QueueRefresh>("queue_refresh", { slot }),
+  queueSetChannel: (slot: number, input: string) => invoke<QueueRefresh>("queue_set_channel", { slot, input }),
+  queueRemove: (slot: number, id: number) => invoke<QueueView>("queue_remove", { slot, id }),
+  queueDisconnect: (slot: number) => invoke<QueueView>("queue_disconnect", { slot }),
 
   libraryList: () => invoke<WatermarkEntry[]>("library_list"),
   libraryAdd: (path: string) => invoke<WatermarkEntry>("library_add", { path }),
@@ -202,6 +222,11 @@ export const api = {
   libraryAddText: (pngBase64: string, style: TextStyle) => invoke<WatermarkEntry>("library_add_text", { pngBase64, style }),
   libraryReplaceText: (id: string, pngBase64: string, style: TextStyle) =>
     invoke<WatermarkEntry>("library_replace_text", { id, pngBase64, style }),
+
+  saveTextImage: (pngBase64: string) => invoke<string>("save_text_image", { pngBase64 }),
+  textPresetsList: () => invoke<TextPreset[]>("text_presets_list"),
+  textPresetsSave: (name: string, style: TextPreset["style"]) => invoke<TextPreset>("text_presets_save", { name, style }),
+  textPresetsRemove: (id: string) => invoke<void>("text_presets_remove", { id }),
 
   historyList: () => invoke<HistoryEntry[]>("history_list"),
   historyRemove: (id: string) => invoke<void>("history_remove", { id }),

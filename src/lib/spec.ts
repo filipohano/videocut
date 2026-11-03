@@ -34,3 +34,9 @@ export function buildExportSpec(v: VideoState, output: string): ExportSpec {
     quality: v.quality,
   };
 }
+
+/** The size of the picture that comes out of the exporter: the cropped frame, which text boxes are placed on. */
+export function exportedFrame(spec: Pick<ExportSpec, "crop" | "sourceWidth" | "sourceHeight">): { w: number; h: number } {
+  const r = spec.crop ?? evenRect(fullRect({ w: spec.sourceWidth, h: spec.sourceHeight }));
+  return { w: r.w, h: r.h };
+}

@@ -16,10 +16,11 @@ Download, crop, trim and watermark videos on your Mac or Windows PC — everythi
   playlists and channels aren't downloaded. A live stream that hasn't ended yet is refused instead of downloading
   forever.
 - **Telegram queue.** Share TikTok, Instagram, X and YouTube links from your phone to a Telegram channel of your own, and
-  they wait in a queue on the start screen: one tap opens one for editing. The app reads the channel when it
-  launches and every 30 minutes while it's open (**Refresh** reads it at once and starts the 30 minutes over).
-  Everyone uses their own channel, so your links only ever reach your own copy of the app. No bot and no
-  server, see [Telegram queue](#telegram-queue).
+  they wait in a queue on the start screen: one tap opens one for editing. There are **two columns side by side**,
+  one per channel, so you can run two channels at once; you choose the channels in Settings. The app reads each
+  channel when it launches and every 30 minutes while it's open (each column has its own **Refresh**, which reads
+  that channel at once and starts its 30 minutes over). Everyone uses their own channels, so your links only ever
+  reach your own copy of the app. No bot and no server, see [Telegram queue](#telegram-queue).
 - **Photos too**: open a JPG, PNG or WebP and crop it, add watermarks and text, and export as JPG (with a quality
   slider) or PNG (lossless, keeps transparency). Phone photos that are stored sideways are handled.
 - **Editor** with a large live preview: drag-to-crop with aspect-ratio presets, trim in/out, and an exact
@@ -28,6 +29,15 @@ Download, crop, trim and watermark videos on your Mac or Windows PC — everythi
   shadow), and it's in the **Add watermark ▾** drop-down every time you open the app. Use several at once; each
   remembers its own position, size and opacity. Drag them anywhere in the preview, even so a PNG's transparent
   margin hangs outside the picture. The visible part always stays inside the frame.
+- **Text on the video.** The **Text** section (below Watermarks) works like the text tool in Instagram and TikTok
+  stories, for covering or changing a caption: type new text and it is put on top of the video. It uses the
+  bundled **TikTok Sans** font, and each text can have a solid background block with rounded corners that hugs
+  every line (a short line under a long one gives the stepped TikTok shape), or no background at all. Pick the text
+  colour and the background colour from the quick swatches (white, black, red, yellow, …) or any colour you like,
+  and set the size, bold and left / centre / right alignment. Text can have several lines, and you can add several
+  texts to one video. Drag a text anywhere in the preview and drag the dot at its corner to resize it. It is burned
+  in on export, exactly as you see it (also in batches and on photos). **Styles ▾** keeps looks you like, so you can
+  apply them to any text later.
 - **Tidy folders.** Downloads are only temporary (deleted when you move on to the next video, and on the next launch); finished exports are kept in
   `~/Movies/FillernCut/Finished`, all named by date and time (`2026-10-01_15-42-07.mp4`) so they sort
   chronologically. The export folder and "ask where to save" are in Settings.
@@ -35,9 +45,9 @@ Download, crop, trim and watermark videos on your Mac or Windows PC — everythi
   instead of a fixed high quality, and shows the expected size before you export.
 - **⌘N** (or **⌘R**) starts over with a new video or photo (it asks first if you have edits you haven't exported), **⌘O** opens
   one.
-- **Undo / Redo** (⌘Z / ⇧⌘Z, or the arrows in the header) for crop, trim, quality and every watermark change.
+- **Undo / Redo** (⌘Z / ⇧⌘Z, or the arrows in the header) for crop, trim, quality and every watermark and text change.
   A drag or a burst of typing is one step.
-- **Batch**: set up the crop, watermarks and quality on one video, press **Batch…**, add more videos (or drop
+- **Batch**: set up the crop, watermarks, text and quality on one video, press **Batch…**, add more videos (or drop
   several at once), and they're all exported with the same edit, one after another.
 - **History** of every download and export, with preview images, "Show in Finder", "Edit again" and "Copy link".
   Removing an entry never deletes the video.
@@ -100,11 +110,12 @@ Collect links on your phone and open them on your computer, without copying anyt
 
 1. In Telegram, create a channel (*New Channel*) and make it **Public** with a username of your own, for example
    `my_links` (*Channel settings → Channel type → Public*).
-2. In FillernCut, under **Telegram queue**, type that username and press **Save**.
+2. In FillernCut, open **Settings**, and under **Telegram queue** type that username in the left column and press
+   **Save**. (A second channel goes in the right column; the same channel can't be in both.)
 3. On your phone, share TikTok, Instagram, X and YouTube links to the channel (*Share → Telegram → your channel*, or just
    paste them there).
 
-They appear in the queue on the start screen; tap one to download it and open it in the editor.
+They appear in that channel's column of the queue on the start screen; tap one to download it and open it in the editor.
 
 - **When it updates.** The channel is read at launch and then every 30 minutes while the app is open. **Refresh**
   reads it straight away and restarts the 30 minutes. A refresh follows the channel back through the newest
@@ -116,6 +127,9 @@ They appear in the queue on the start screen; tap one to download it and open it
   (`t.me/s/<name>`) directly from your computer, with no bot, no account and no server in between. Telegram doesn't
   show private channels there. It also means anyone who knows the name can read the channel, so pick a name nobody
   would guess and only post links there. Only a channel's admins can post in it, so nobody else can fill your queue.
+- **Two columns.** Each column reads its own channel and keeps its own links, so the two never mix. If you only
+  use one channel, the other column just stays empty (you can ignore it). Existing setups keep working: the channel
+  you already had is the left column.
 - **Everyone has their own queue.** Each person types their own channel, so a link posted to yours never reaches
   anyone else's copy of the app. (Two people who type the same channel share it.)
 - **If it stops filling.** The web view is Telegram's, not a documented interface. If Telegram changes it, update

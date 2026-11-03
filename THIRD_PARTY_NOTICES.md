@@ -11,5 +11,15 @@ processes (they are not linked into the app):
 `scripts/fetch-binaries.sh` (macOS) and `scripts/fetch-binaries-windows.sh` (Windows) download the ffmpeg builds (verifying SHA-256 checksums) at build time; none are
 stored in this repository.
 
+## Font
+
+The app bundles one font, used by the **Text** section of the editor:
+
+| Font | License | Source |
+| --- | --- | --- |
+| **TikTok Sans** (Regular and Bold) — Copyright 2024 TikTok Inc. | SIL Open Font License 1.1 (full text in [`src/assets/fonts/OFL.txt`](src/assets/fonts/OFL.txt)) | <https://fonts.google.com/specimen/TikTok+Sans> |
+
+The font files are converted to WOFF2 for the app; the OFL allows that and allows bundling the font with software.
+
 The app is built on [Tauri](https://tauri.app) (MIT / Apache-2.0) and the Rust crates and npm packages listed in
 `Cargo.lock` and `package-lock.json`.

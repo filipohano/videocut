@@ -1,6 +1,7 @@
 /**
  * Undo / redo for everything you can change on the current video: crop, aspect,
- * trim, quality and the watermark list (placement, size, opacity, text, which are on).
+ * trim, quality, the watermark list (placement, size, opacity, text, which are on) and the
+ * text boxes.
  *
  * Instead of hooking every control, changes are noticed through the store: after a
  * short pause with no further change the state is snapshotted. A drag or a typing
@@ -8,6 +9,7 @@
  */
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { renderText } from "./lib/textImage";
+import { sanitizeTextBox, type TextBox } from "./lib/textBox";
 import { store, type ActiveWatermark } from "./store";
 import { scheduleTextSave } from "./watermarkOps";
 import { debounce } from "./ui/dom";
@@ -24,6 +26,8 @@ interface Snapshot {
   imageFormat: "jpg" | "png";
   watermarks: ActiveWatermark[];
   selected: string | null;
+  texts: TextBox[];
+  selectedText: string | null;
 }
 
 let states: string[] = [];
@@ -46,6 +50,8 @@ function serialize(): string | null {
     imageFormat: v.imageFormat,
     watermarks: v.watermarks.map((w) => ({ ...w, url: w.text ? "" : w.url })),
     selected: store.selectedWatermark,
+    texts: v.texts,
+    selectedText: store.selectedText,
   };
   return JSON.stringify(snap);
 }
@@ -119,8 +125,11 @@ function restore(json: string): void {
         scheduleTextSave(w, r.base64); // the exporter reads the saved PNG
         return { ...w, url: r.dataUrl, aspect: r.height / r.width, content: r.content };
       });
+    // Text boxes are plain data: the pictures are drawn again from them.
+    v.texts = snap.texts.map(sanitizeTextBox).filter((t): t is TextBox => t !== null);
     store.selectedWatermark = v.watermarks.some((w) => w.id === snap.selected) ? snap.selected : null;
-    store.emit("crop", "trim", "watermarks", "selection", "quality");
+    store.selectedText = !store.selectedWatermark && v.texts.some((t) => t.id === snap.selectedText) ? snap.selectedText : null;
+    store.emit("crop", "trim", "watermarks", "texts", "selection", "quality");
   } finally {
     restoring = false;
   }
@@ -144,5 +153,5 @@ export function redo(): void {
 
 export function initUndo(): void {
   store.on("video", reset);
-  store.on(["crop", "trim", "watermarks", "quality"], () => !restoring && settle());
+  store.on(["crop", "trim", "watermarks", "texts", "quality"], () => !restoring && settle());
 }

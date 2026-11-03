@@ -4,9 +4,11 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { CANCELLED, api, errorMessage } from "../api";
 import { DEFAULT_BATCH_OPTIONS, buildBatchSpec, type BatchOptions } from "../lib/batch";
 import { basename } from "../lib/format";
+import { exportedFrame } from "../lib/spec";
 import { PHOTO_EXTENSIONS, VIDEO_EXTENSIONS, isMediaPath } from "../lib/links";
 import { subscribe } from "../progress";
 import { store } from "../store";
+import { textOverlaySpecs } from "../textExport";
 import { flushTextSaves } from "../watermarkOps";
 import { $, h } from "./dom";
 import { toast } from "./toast";
@@ -85,6 +87,7 @@ export function initBatchDialog(): void {
     const v = store.video;
     const crop = v ? `${Math.round((v.crop.w / v.info.width) * 100)}% × ${Math.round((v.crop.h / v.info.height) * 100)}% of the frame` : "";
     const wms = v?.watermarks.length ?? 0;
+    const txts = v?.texts.filter((t) => t.text.trim() !== "").length ?? 0;
     const queued = items.filter((i) => i.status === "queued").length;
     const done = items.filter((i) => i.status === "done").length;
     const failed = items.filter((i) => i.status === "error").length;
@@ -122,7 +125,7 @@ export function initBatchDialog(): void {
       h(
         "p",
         { class: "batch-summary" },
-        `Repeats what you set up on “${v ? basename(v.path) : ""}”: ${v && v.crop.w === v.info.width && v.crop.h === v.info.height ? "no crop" : `crop ${crop}`}, ${wms} watermark${wms === 1 ? "" : "s"}, quality ${v?.quality ?? ""}. Trim isn't copied. Each result is saved to your Finished folder.`,
+        `Repeats what you set up on “${v ? basename(v.path) : ""}”: ${v && v.crop.w === v.info.width && v.crop.h === v.info.height ? "no crop" : `crop ${crop}`}, ${wms} watermark${wms === 1 ? "" : "s"}, ${txts} text${txts === 1 ? "" : "s"}, quality ${v?.quality ?? ""}. Trim isn't copied. Each result is saved to your Finished folder.`,
       ),
       h("div", { class: "batch-opts" }, option("Crop the same area", "Same relative area of every video. The aspect ratio follows each video.", "applyCrop"), option("Add the watermarks and text", "In the same places and sizes.", "applyWatermarks")),
       h(
@@ -172,7 +175,10 @@ export function initBatchDialog(): void {
         try {
           const info = await api.probeMedia(item.path);
           const output = await api.defaultSavePath(template.info.isImage ? template.imageFormat : "mp4");
-          item.output = await api.exportVideo(buildBatchSpec(template, info, item.path, output, opts));
+          const spec = buildBatchSpec(template, info, item.path, output, opts);
+          // Text is drawn again for every file, at the size of that file's picture.
+          if (opts.applyWatermarks) spec.watermarks.push(...(await textOverlaySpecs(template.texts, exportedFrame(spec))));
+          item.output = await api.exportVideo(spec);
           item.status = "done";
         } catch (e) {
           const msg = errorMessage(e);

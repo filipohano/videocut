@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildExportSpec } from "./spec";
+import { buildExportSpec, exportedFrame } from "./spec";
 import type { VideoState } from "../store";
 
 function video(over: Partial<VideoState> = {}): VideoState {
@@ -12,6 +12,7 @@ function video(over: Partial<VideoState> = {}): VideoState {
     trimStart: 0,
     trimEnd: 10,
     watermarks: [],
+    texts: [],
     quality: 60,
     imageFormat: "jpg",
     ...over,
@@ -78,5 +79,18 @@ describe("buildExportSpec", () => {
     expect(s.watermarks).toEqual([{ path: "/lib/1.png", nx: 0.7, ny: 0.8, scale: 0.2, opacity: 0.6, content: { l: 0.1, t: 0, r: 0.9, b: 1 } }]);
     expect(s.sourceBitrate).toBe(3_000_000);
     expect(s.fps).toBe(30);
+  });
+});
+
+describe("exportedFrame", () => {
+  it("is the cropped area, which the text boxes are placed on", () => {
+    expect(exportedFrame(buildExportSpec(video({ crop: { x: 100, y: 200, w: 500, h: 600 } }), "/out/a.mp4"))).toEqual({ w: 500, h: 600 });
+  });
+  it("is the whole picture when nothing is cropped", () => {
+    expect(exportedFrame(buildExportSpec(video(), "/out/a.mp4"))).toEqual({ w: 1080, h: 1920 });
+  });
+  it("is the picture rounded down to even sizes when the source has odd ones", () => {
+    const odd = video({ info: { ...video().info, width: 1081, height: 1921 }, crop: { x: 0, y: 0, w: 1081, h: 1921 } });
+    expect(exportedFrame(buildExportSpec(odd, "/out/a.mp4"))).toEqual({ w: 1080, h: 1920 });
   });
 });

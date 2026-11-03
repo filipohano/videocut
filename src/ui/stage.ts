@@ -1,13 +1,16 @@
 /**
- * The preview: video + crop overlay + watermark overlays + transport controls.
+ * The preview: video + crop overlay + watermark and text overlays + transport controls.
  * All coordinates in the store are in source-video pixels (crop) or fractions
- * of the cropped frame (watermarks); this module converts to/from screen px.
+ * of the cropped frame (watermarks, text boxes); this module converts to/from screen px.
  */
 import { MIN_CROP, evenRect, moveRect, ratioValue, resizeRect, type Handle, type Rect } from "../lib/crop";
 import { clamp, formatClock } from "../lib/format";
 import { moveTo, reclampAll, select, setScaleKeepingCorner } from "../watermarkOps";
 import { MIN_SCALE, heightFraction } from "../lib/watermarks";
+import { imagePosition, isEmptyText, sizeAfterResize, type TextLayout } from "../lib/textBox";
+import { drawTextBox } from "../lib/textRender";
 import { store, type ActiveWatermark } from "../store";
+import { layoutOf, moveText, resizeKeepingCorner, selectText, textById } from "../textOps";
 import { $, h, raf } from "./dom";
 
 const HANDLES: Handle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
@@ -33,6 +36,7 @@ export function initStage(): Stage {
   const cropDim = $("#crop-dim");
   const handleLayer = $("#handle-layer");
   const wmLayer = $("#wm-layer");
+  const textLayer = $("#text-layer");
   const playBtn = $("#btn-play");
   const playIcon = $("#play-icon");
   const seek = $<HTMLInputElement>("#seek");
@@ -202,7 +206,100 @@ export function initStage(): Stage {
     grip.addEventListener("pointercancel", onUp);
   }
 
-  // Clicking empty video deselects the watermark.
+  // ───────── text overlay ─────────
+  interface TextParts {
+    el: HTMLElement;
+    canvas: HTMLCanvasElement;
+    outline: HTMLElement;
+    /** What the canvas shows now, so it is only drawn again when that changes. */
+    drawn: { layout: TextLayout; color: string; background: string | null; bold: boolean } | null;
+  }
+  const textEls = new Map<string, TextParts>();
+  const textGrip = h("div", { class: "wm-grip text-grip hidden", title: "Drag to resize" });
+  handleLayer.append(textGrip);
+  textGrip.addEventListener("pointerdown", (e) => startTextGripDrag(e));
+
+  function renderTexts(): void {
+    const list = store.video?.texts ?? [];
+    const ids = new Set(list.map((t) => t.id));
+    for (const [id, { el }] of textEls)
+      if (!ids.has(id)) {
+        el.remove();
+        textEls.delete(id);
+      }
+    for (const box of list) {
+      let parts = textEls.get(box.id);
+      if (!parts) {
+        const canvas = h("canvas", { class: "text-canvas" });
+        const outline = h("span", { class: "text-outline" });
+        const el = h("div", { class: "text-box", "data-id": box.id }, canvas, outline);
+        el.addEventListener("pointerdown", (e) => startTextDrag(e, box.id, el));
+        textLayer.append(el);
+        parts = { el, canvas, outline, drawn: null };
+        textEls.set(box.id, parts);
+      }
+      const layout = layoutOf(box);
+      const d = parts.drawn;
+      if (!d || d.layout !== layout || d.color !== box.color || d.background !== box.background || d.bold !== box.bold) {
+        drawTextBox(parts.canvas, box, layout);
+        parts.drawn = { layout, color: box.color, background: box.background, bold: box.bold };
+      }
+    }
+    layout();
+  }
+
+  function startTextDrag(e: PointerEvent, id: string, el: HTMLElement): void {
+    const v = store.video;
+    const box = textById(id);
+    if (!v || !box || e.button !== 0) return;
+    e.preventDefault();
+    selectText(id);
+    el.setPointerCapture(e.pointerId);
+    el.classList.add("dragging");
+    const sx = e.clientX;
+    const sy = e.clientY;
+    const { cx, cy } = box;
+    const onMove = (ev: PointerEvent) => {
+      moveText(id, cx + (ev.clientX - sx) / k / v.crop.w, cy + (ev.clientY - sy) / k / v.crop.h);
+    };
+    const onUp = () => {
+      el.classList.remove("dragging");
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+  }
+
+  function startTextGripDrag(e: PointerEvent): void {
+    const v = store.video;
+    const id = store.selectedText;
+    const box = textById(id);
+    if (!v || !id || !box || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    textGrip.setPointerCapture(e.pointerId);
+    const sx = e.clientX;
+    const start = layoutOf(box);
+    const startSize = box.size;
+    // The block's top-left corner stays where it is while it grows.
+    const topLeft = { x: box.cx * v.crop.w - start.blockW / 2, y: box.cy * v.crop.h - start.blockH / 2 };
+    const onMove = (ev: PointerEvent) => {
+      resizeKeepingCorner(id, sizeAfterResize(startSize, start.blockW, (ev.clientX - sx) / k), topLeft);
+    };
+    const onUp = () => {
+      textGrip.removeEventListener("pointermove", onMove);
+      textGrip.removeEventListener("pointerup", onUp);
+      textGrip.removeEventListener("pointercancel", onUp);
+    };
+    textGrip.addEventListener("pointermove", onMove);
+    textGrip.addEventListener("pointerup", onUp);
+    textGrip.addEventListener("pointercancel", onUp);
+  }
+
+  // Clicking empty video deselects the watermark or text.
   stage.addEventListener("pointerdown", (e) => {
     if (e.target === video) select(null);
   });
@@ -231,6 +328,35 @@ export function initStage(): Stage {
     const hFrac = heightFraction(wm.scale, wm.aspect, crop);
     grip.style.left = `${(crop.x + (wm.nx + wm.content.r * wm.scale) * crop.w) * k}px`;
     grip.style.top = `${(crop.y + (wm.ny + wm.content.b * hFrac) * crop.h) * k}px`;
+  }
+
+  function layoutTexts(crop: Rect): void {
+    const v = store.video;
+    if (!v) return;
+    for (const box of v.texts) {
+      const parts = textEls.get(box.id);
+      if (!parts) continue;
+      const L = layoutOf(box);
+      const pos = imagePosition(box, L, crop.w, crop.h);
+      const { el, outline } = parts;
+      el.style.left = `${(crop.x + pos.left) * k}px`;
+      el.style.top = `${(crop.y + pos.top) * k}px`;
+      el.style.width = `${L.imgW * k}px`;
+      el.style.height = `${L.imgH * k}px`;
+      el.classList.toggle("selected", store.selectedText === box.id);
+      el.classList.toggle("empty", isEmptyText(box.text));
+      outline.style.left = `${L.offX * k}px`;
+      outline.style.top = `${L.offY * k}px`;
+      outline.style.width = `${L.blockW * k}px`;
+      outline.style.height = `${L.blockH * k}px`;
+    }
+    const sel = textById(store.selectedText);
+    textGrip.classList.toggle("hidden", !sel);
+    if (!sel) return;
+    const L = layoutOf(sel);
+    const pos = imagePosition(sel, L, crop.w, crop.h);
+    textGrip.style.left = `${(crop.x + pos.left + L.offX + L.blockW) * k}px`;
+    textGrip.style.top = `${(crop.y + pos.top + L.offY + L.blockH) * k}px`;
   }
 
   function layout(): void {
@@ -269,13 +395,18 @@ export function initStage(): Stage {
       el.style.top = `${pos[name][1] * k}px`;
     }
     // Watermarks are only visible inside the crop, exactly as in the export.
-    wmLayer.style.clipPath = `inset(${c.y * k}px ${(f.w - c.x - c.w) * k}px ${(f.h - c.y - c.h) * k}px ${c.x * k}px)`;
+    const clip = `inset(${c.y * k}px ${(f.w - c.x - c.w) * k}px ${(f.h - c.y - c.h) * k}px ${c.x * k}px)`;
+    wmLayer.style.clipPath = clip;
+    textLayer.style.clipPath = clip;
     v.watermarks.forEach((wm) => layoutWatermark(wm, c));
     layoutGrip(c);
+    layoutTexts(c);
   }
 
   store.on(["crop", "watermarks", "selection"], raf(layout));
   store.on("watermarks", renderWatermarks);
+  // A new crop width changes the size of the letters too, so the text is drawn again.
+  store.on(["crop", "texts"], raf(renderTexts));
 
   // ───────── transport ─────────
   let duration = 0;
@@ -394,10 +525,13 @@ export function initStage(): Stage {
       video.load();
       for (const { el } of wmEls.values()) el.remove();
       wmEls.clear();
+      for (const { el } of textEls.values()) el.remove();
+      textEls.clear();
       return;
     }
     duration = v.info.duration;
     renderWatermarks();
+    renderTexts();
     updateClock();
     updateTrimRange();
     fit();

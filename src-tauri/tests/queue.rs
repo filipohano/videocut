@@ -160,19 +160,41 @@ fn urls(view: &Value) -> Vec<String> {
         .collect()
 }
 
+/// Set the channel of the left column.
 fn set(h: &Harness, channel: &str) -> Result<Value, Value> {
-    call(&h.win, "queue_set_channel", json!({ "input": channel }))
+    set_slot(h, 0, channel)
+}
+
+fn set_slot(h: &Harness, slot: usize, channel: &str) -> Result<Value, Value> {
+    call(
+        &h.win,
+        "queue_set_channel",
+        json!({ "slot": slot, "input": channel }),
+    )
+}
+
+fn refresh(h: &Harness, slot: usize) -> Result<Value, Value> {
+    call(&h.win, "queue_refresh", json!({ "slot": slot }))
+}
+
+/// The queue of one column, as `queue_get` reports it.
+fn column(h: &Harness, slot: usize) -> Value {
+    call(&h.win, "queue_get", json!({})).unwrap()[slot].clone()
 }
 
 #[test]
-fn a_new_queue_is_empty_and_not_connected() {
+fn a_new_app_has_two_empty_columns() {
     let Some(h) = harness() else { return };
-    let view = call(&h.win, "queue_get", json!({})).unwrap();
-    assert!(view["channel"].is_null());
-    assert_eq!(view["items"].as_array().unwrap().len(), 0);
-    // Refreshing without a channel is not an error: there is just nothing to read.
-    let refreshed = call(&h.win, "queue_refresh", json!({})).unwrap();
-    assert_eq!(refreshed["added"], 0);
+    let views = call(&h.win, "queue_get", json!({})).unwrap();
+    let views = views.as_array().unwrap();
+    assert_eq!(views.len(), 2);
+    for (slot, view) in views.iter().enumerate() {
+        assert_eq!(view["slot"], slot);
+        assert!(view["channel"].is_null());
+        assert_eq!(view["items"].as_array().unwrap().len(), 0);
+        // Refreshing a column without a channel is not an error: there is just nothing to read.
+        assert_eq!(refresh(&h, slot).unwrap()["added"], 0);
+    }
 }
 
 #[test]
@@ -211,14 +233,14 @@ fn only_new_posts_are_added_later_and_paging_follows_back_to_where_it_stopped() 
     assert_eq!(requests(name), 1);
 
     // Nothing new: one request, nothing added.
-    assert_eq!(call(&h.win, "queue_refresh", json!({})).unwrap()["added"], 0);
+    assert_eq!(refresh(&h, 0).unwrap()["added"], 0);
     assert_eq!(requests(name), 2);
 
     // 12 new posts: three pages of five are needed to get back to post 3.
     for n in 4..=15 {
         post_link(name, n, &tweet(n));
     }
-    let refreshed = call(&h.win, "queue_refresh", json!({})).unwrap();
+    let refreshed = refresh(&h, 0).unwrap();
     assert_eq!(refreshed["added"], 12);
     assert_eq!(requests(name), 2 + 3);
     let all = urls(&refreshed["view"]);
@@ -241,7 +263,7 @@ fn a_refresh_never_reads_more_than_five_pages() {
     for n in 2..=100 {
         post_link(name, n, &tweet(n));
     }
-    let refreshed = call(&h.win, "queue_refresh", json!({})).unwrap();
+    let refreshed = refresh(&h, 0).unwrap();
     assert_eq!(requests(name) - before, 5);
     // The newest 25 were read; the app doesn't go digging through all of history.
     assert_eq!(refreshed["added"], 25);
@@ -260,7 +282,7 @@ fn connecting_to_an_old_channel_picks_up_its_newest_posts_only() {
     assert_eq!(urls(&result["view"]), (26..=40).map(tweet).collect::<Vec<_>>());
     // What is older than that is skipped for good, not trickled in later.
     post_link(name, 41, &tweet(41));
-    let later = call(&h.win, "queue_refresh", json!({})).unwrap();
+    let later = refresh(&h, 0).unwrap();
     assert_eq!(later["added"], 1);
     assert_eq!(urls(&later["view"]).len(), 16);
 }
@@ -298,16 +320,16 @@ fn a_link_that_was_opened_or_removed_does_not_come_back() {
     open_channel(name, vec![(1, link(REEL)), (2, link(TIKTOK))]);
     let view = set(&h, name).unwrap()["view"].clone();
     let first = view["items"][0]["id"].as_i64().unwrap();
-    let after = call(&h.win, "queue_remove", json!({ "id": first })).unwrap();
+    let after = call(&h.win, "queue_remove", json!({ "slot": 0, "id": first })).unwrap();
     assert_eq!(urls(&after), vec![TIKTOK]);
 
-    let refreshed = call(&h.win, "queue_refresh", json!({})).unwrap();
+    let refreshed = refresh(&h, 0).unwrap();
     assert_eq!(refreshed["added"], 0);
     assert_eq!(urls(&refreshed["view"]), vec![TIKTOK]);
 
     // Posting the same link again is a new post, and queues it again.
     post_link(name, 3, REEL);
-    let again = call(&h.win, "queue_refresh", json!({})).unwrap();
+    let again = refresh(&h, 0).unwrap();
     assert_eq!(again["added"], 1);
     assert_eq!(urls(&again["view"]), vec![TIKTOK, REEL]);
 }
@@ -324,7 +346,7 @@ fn a_channel_that_cannot_be_read_is_explained_and_not_saved() {
         set(&h, "empty_channel").is_err(),
         "a channel without posts can't be checked"
     );
-    assert!(call(&h.win, "queue_get", json!({})).unwrap()["channel"].is_null());
+    assert!(column(&h, 0)["channel"].is_null());
 
     // Names that aren't channels never reach the network.
     for (input, word) in [
@@ -347,7 +369,7 @@ fn trouble_reaching_telegram_is_explained_and_loses_nothing() {
     post_link(name, 2, TIKTOK);
 
     server().channels.lock().unwrap().get_mut(name).unwrap().status = Some(503);
-    let err = call(&h.win, "queue_refresh", json!({})).unwrap_err();
+    let err = refresh(&h, 0).unwrap_err();
     assert!(err.as_str().unwrap().contains("503"), "{err}");
     {
         let mut channels = server().channels.lock().unwrap();
@@ -355,17 +377,13 @@ fn trouble_reaching_telegram_is_explained_and_loses_nothing() {
         c.status = None;
         c.hang_up = true;
     }
-    let err = call(&h.win, "queue_refresh", json!({})).unwrap_err();
+    let err = refresh(&h, 0).unwrap_err();
     assert!(err.as_str().unwrap().contains("Couldn't reach Telegram"), "{err}");
-    assert_eq!(
-        urls(&call(&h.win, "queue_get", json!({})).unwrap()),
-        vec![REEL],
-        "what was already there stays"
-    );
+    assert_eq!(urls(&column(&h, 0)), vec![REEL], "what was already there stays");
 
     // Once it works again the missed post arrives.
     server().channels.lock().unwrap().get_mut(name).unwrap().hang_up = false;
-    let refreshed = call(&h.win, "queue_refresh", json!({})).unwrap();
+    let refreshed = refresh(&h, 0).unwrap();
     assert_eq!(refreshed["added"], 1);
     assert_eq!(urls(&refreshed["view"]), vec![REEL, TIKTOK]);
 }
@@ -384,14 +402,8 @@ fn two_people_only_ever_see_their_own_channel() {
     assert_eq!(urls(&from_b["view"]), vec![TIKTOK]);
 
     post_link("filips_links", 2, TWEET);
-    assert_eq!(
-        urls(&call(&a.win, "queue_refresh", json!({})).unwrap()["view"]),
-        vec![REEL, TWEET]
-    );
-    assert_eq!(
-        urls(&call(&b.win, "queue_refresh", json!({})).unwrap()["view"]),
-        vec![TIKTOK]
-    );
+    assert_eq!(urls(&refresh(&a, 0).unwrap()["view"]), vec![REEL, TWEET]);
+    assert_eq!(urls(&refresh(&b, 0).unwrap()["view"]), vec![TIKTOK]);
 }
 
 #[test]
@@ -404,10 +416,10 @@ fn changing_channel_starts_a_fresh_queue_and_disconnecting_forgets_everything() 
     let changed = set(&h, "second_channel").unwrap();
     assert_eq!(urls(&changed["view"]), vec![TIKTOK]);
 
-    let view = call(&h.win, "queue_disconnect", json!({})).unwrap();
+    let view = call(&h.win, "queue_disconnect", json!({ "slot": 0 })).unwrap();
     assert!(view["channel"].is_null());
     assert_eq!(view["items"].as_array().unwrap().len(), 0);
-    assert_eq!(call(&h.win, "queue_refresh", json!({})).unwrap()["added"], 0);
+    assert_eq!(refresh(&h, 0).unwrap()["added"], 0);
     // Connecting to the same channel again starts over and finds its latest posts.
     assert_eq!(set(&h, "second_channel").unwrap()["added"], 1);
 }
@@ -420,9 +432,9 @@ fn the_queue_is_kept_on_disk_with_nothing_secret_in_it() {
     set(&h, "saved_links").unwrap();
     let text = std::fs::read_to_string(h.dir.path().join("data/queue.json")).unwrap();
     let saved: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(saved["channel"], "saved_links");
-    assert_eq!(saved["items"][0]["url"], REEL);
-    assert!(saved.get("token").is_none(), "{text}");
+    assert_eq!(saved["slots"][0]["channel"], "saved_links");
+    assert_eq!(saved["slots"][0]["items"][0]["url"], REEL);
+    assert!(!text.contains("token"), "{text}");
 }
 
 #[test]
@@ -438,4 +450,144 @@ fn only_a_channel_address_can_be_opened_besides_the_projects_pages() {
         let err = call(&h.win, "open_url", json!({ "url": bad })).unwrap_err();
         assert!(err.as_str().unwrap().contains("isn't allowed"), "{bad}: {err}");
     }
+}
+
+#[test]
+fn the_two_columns_read_their_own_channels_independently() {
+    let Some(h) = harness() else { return };
+    server();
+    open_channel("column_one", vec![(1, link(REEL))]);
+    open_channel("column_two", vec![(1, link(TIKTOK)), (2, link(TWEET))]);
+
+    let left = set_slot(&h, 0, "@column_one").unwrap();
+    let right = set_slot(&h, 1, "@column_two").unwrap();
+    assert_eq!(left["view"]["slot"], 0);
+    assert_eq!(right["view"]["slot"], 1);
+    assert_eq!(urls(&left["view"]), vec![REEL]);
+    assert_eq!(urls(&right["view"]), vec![TIKTOK, TWEET]);
+    assert_eq!(column(&h, 0)["channel"], "column_one");
+    assert_eq!(column(&h, 1)["channel"], "column_two");
+
+    // New posts in one channel only reach that column, and each refresh reads only its own.
+    let (reads_one, reads_two) = (requests("column_one"), requests("column_two"));
+    post_link("column_one", 2, &tweet(2));
+    assert_eq!(refresh(&h, 0).unwrap()["added"], 1);
+    assert_eq!(requests("column_one"), reads_one + 1);
+    assert_eq!(
+        requests("column_two"),
+        reads_two,
+        "the other column wasn't touched"
+    );
+    assert_eq!(urls(&column(&h, 0)), vec![REEL, tweet(2).as_str()]);
+    assert_eq!(urls(&column(&h, 1)), vec![TIKTOK, TWEET]);
+
+    // Removing, and disconnecting, only affect one column.
+    let first = column(&h, 1)["items"][0]["id"].as_i64().unwrap();
+    let after = call(&h.win, "queue_remove", json!({ "slot": 1, "id": first })).unwrap();
+    assert_eq!(after["slot"], 1);
+    assert_eq!(urls(&after), vec![TWEET]);
+    assert_eq!(urls(&column(&h, 0)).len(), 2);
+    call(&h.win, "queue_disconnect", json!({ "slot": 0 })).unwrap();
+    assert!(column(&h, 0)["channel"].is_null());
+    assert_eq!(column(&h, 1)["channel"], "column_two");
+    assert_eq!(urls(&column(&h, 1)), vec![TWEET]);
+}
+
+#[test]
+fn both_columns_can_be_refreshed_at_the_same_time() {
+    let Some(h) = harness() else { return };
+    server();
+    open_channel("parallel_one", vec![(1, link(REEL))]);
+    open_channel("parallel_two", vec![(1, link(TIKTOK))]);
+    set_slot(&h, 0, "parallel_one").unwrap();
+    set_slot(&h, 1, "parallel_two").unwrap();
+    post_link("parallel_one", 2, &tweet(2));
+    post_link("parallel_two", 2, &tweet(3));
+    // Not the same "job": one refresh must not turn the other into a no-op.
+    let (win_a, win_b) = (h.win.clone(), h.win.clone());
+    let a = std::thread::spawn(move || call(&win_a, "queue_refresh", json!({ "slot": 0 })).unwrap());
+    let b = std::thread::spawn(move || call(&win_b, "queue_refresh", json!({ "slot": 1 })).unwrap());
+    let (a, b) = (a.join().unwrap(), b.join().unwrap());
+    assert_eq!(a["added"], 1);
+    assert_eq!(b["added"], 1);
+}
+
+#[test]
+fn one_channel_cannot_fill_both_columns() {
+    let Some(h) = harness() else { return };
+    server();
+    open_channel("only_one_channel", vec![(1, link(REEL))]);
+    open_channel("a_second_channel", vec![(1, link(TIKTOK))]);
+    set_slot(&h, 0, "only_one_channel").unwrap();
+    // The same name, however it is written (and Telegram ignores capitals).
+    for input in [
+        "only_one_channel",
+        "@Only_One_Channel",
+        "https://t.me/s/only_one_channel",
+    ] {
+        let err = set_slot(&h, 1, input).unwrap_err();
+        assert!(
+            err.as_str().unwrap().contains("already in the left column"),
+            "{input}: {err}"
+        );
+    }
+    assert!(column(&h, 1)["channel"].is_null());
+    // Another channel is fine, and the first column can't take the second's channel either.
+    set_slot(&h, 1, "a_second_channel").unwrap();
+    let err = set_slot(&h, 0, "a_second_channel").unwrap_err();
+    assert!(
+        err.as_str().unwrap().contains("already in the right column"),
+        "{err}"
+    );
+    assert_eq!(
+        column(&h, 0)["channel"],
+        "only_one_channel",
+        "the failed change left it alone"
+    );
+}
+
+#[test]
+fn setting_a_channel_again_keeps_the_queue_even_if_the_capitals_changed() {
+    let Some(h) = harness() else { return };
+    server();
+    open_channel("Mixed_Case_Chan", vec![(1, link(REEL))]);
+    let first = set(&h, "Mixed_Case_Chan").unwrap();
+    assert_eq!(urls(&first["view"]), vec![REEL]);
+    let id = first["view"]["items"][0]["id"].as_i64().unwrap();
+    call(&h.win, "queue_remove", json!({ "slot": 0, "id": id })).unwrap();
+    // Typing the name differently is not a new channel: nothing already read comes back.
+    let again = set(&h, "@mixed_case_chan").unwrap();
+    assert_eq!(again["added"], 0);
+    assert_eq!(again["view"]["channel"], "Mixed_Case_Chan");
+    assert_eq!(urls(&again["view"]).len(), 0);
+}
+
+#[test]
+fn a_column_that_does_not_exist_is_an_error_not_a_crash() {
+    let Some(h) = harness() else { return };
+    for (cmd, body) in [
+        ("queue_refresh", json!({ "slot": 2 })),
+        ("queue_set_channel", json!({ "slot": 7, "input": "my_links" })),
+        ("queue_remove", json!({ "slot": 2, "id": 1 })),
+        ("queue_disconnect", json!({ "slot": 99 })),
+    ] {
+        let err = call(&h.win, cmd, body).unwrap_err();
+        assert!(err.as_str().unwrap().contains("only 2 columns"), "{cmd}: {err}");
+    }
+}
+
+#[test]
+fn the_queues_are_kept_on_disk_one_per_column() {
+    let Some(h) = harness() else { return };
+    server();
+    open_channel("disk_one", vec![(1, link(REEL))]);
+    open_channel("disk_two", vec![(1, link(TIKTOK))]);
+    set_slot(&h, 0, "disk_one").unwrap();
+    set_slot(&h, 1, "disk_two").unwrap();
+    let saved: Value =
+        serde_json::from_str(&std::fs::read_to_string(h.dir.path().join("data/queue.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved["slots"].as_array().unwrap().len(), 2);
+    assert_eq!(saved["slots"][0]["channel"], "disk_one");
+    assert_eq!(saved["slots"][1]["items"][0]["url"], TIKTOK);
 }

@@ -51,6 +51,14 @@ export class RefreshTimer {
     return this.runNow();
   }
 
+  /** Start the countdown without running now (the thing was only just refreshed). */
+  arm(): void {
+    this.stopped = false;
+    clearTimeout(this.handle);
+    this.lastRun = Date.now();
+    this.handle = setTimeout(() => void this.runNow(), this.period);
+  }
+
   /** Run now (a button press, or the timer) and restart the countdown. `task` replaces the default for this run. */
   async runNow(task: () => Promise<void> = this.task): Promise<void> {
     if (this.running) return;

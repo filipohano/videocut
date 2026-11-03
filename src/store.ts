@@ -1,7 +1,8 @@
 /** Application state with a minimal topic-based change notification. */
-import type { MediaInfo, Settings, WatermarkEntry } from "./api";
+import type { MediaInfo, QueueView, Settings, TextPreset, WatermarkEntry } from "./api";
 import type { Rect } from "./lib/crop";
 import type { Platform } from "./lib/platform";
+import type { TextBox } from "./lib/textBox";
 
 export interface ActiveWatermark extends WatermarkEntry {
   /** `asset:` URL for <img>. */
@@ -19,6 +20,8 @@ export interface VideoState {
   trimStart: number;
   trimEnd: number;
   watermarks: ActiveWatermark[];
+  /** Text boxes burned in on top of the watermarks. */
+  texts: TextBox[];
   quality: number;
   /** photos only: what to export */
   imageFormat: "jpg" | "png";
@@ -29,11 +32,14 @@ export type Topic =
   | "crop"
   | "trim"
   | "watermarks" // active watermarks changed
+  | "texts" // the text boxes on the video changed
+  | "textStyles" // saved text styles changed
   | "library" // saved watermark list changed
-  | "selection" // selected watermark changed
+  | "selection" // selected watermark or text box changed
   | "quality"
   | "undo" // undo/redo availability changed
   | "settings"
+  | "queue" // a Telegram queue column changed (channel, links)
   | "update"
   | "busy"
   | "playhead";
@@ -49,6 +55,10 @@ class Store {
   settings!: Settings;
   library: WatermarkEntry[] = [];
   selectedWatermark: string | null = null;
+  /** At most one of the watermark and the text box is selected. */
+  selectedText: string | null = null;
+  /** Saved looks for text boxes. */
+  textPresets: TextPreset[] = [];
   appVersion = "";
   platform: Platform = "macos";
   /** The encoder exports use first: an encoder id, or "none". */
@@ -56,6 +66,8 @@ class Store {
   /** Encoders that work on this machine. */
   encoders: { id: string; label: string }[] = [];
   update: UpdateInfo | null = null;
+  /** The Telegram queue, one entry per column. */
+  queue: QueueView[] = [];
   /** True while a download / export / preview is running. */
   busy = false;
   playhead = 0;

@@ -16,6 +16,7 @@ import {
   type Corner,
 } from "./lib/watermarks";
 import { store, type ActiveWatermark } from "./store";
+import { reclampTexts } from "./textOps";
 import { debounce } from "./ui/dom";
 import { toast } from "./ui/toast";
 
@@ -53,8 +54,10 @@ export function activeWatermark(id: string): ActiveWatermark | undefined {
 }
 
 export function select(id: string | null): void {
-  if (store.selectedWatermark === id) return;
+  // Selecting a watermark deselects the text box and the other way round; select(null) clears both.
+  if (store.selectedWatermark === id && (id !== null || store.selectedText === null)) return;
   store.selectedWatermark = id;
+  if (id !== null || store.selectedText !== null) store.selectedText = null;
   store.emit("selection");
 }
 
@@ -79,6 +82,7 @@ export function addToVideo(entry: WatermarkEntry, opts: { snapToCorner?: boolean
   v.watermarks.push(wm);
   persist(wm);
   store.selectedWatermark = wm.id;
+  store.selectedText = null;
   store.emit("watermarks", "selection");
 }
 
@@ -132,10 +136,11 @@ export function applyCorner(id: string, corner: Corner): void {
   apply(wm, cornerPlacement(corner, wm.scale, wm.aspect, cropSize(), wm.content));
 }
 
-/** Keep every watermark's content inside the frame after the crop changed. */
+/** Keep every watermark's content (and every text box) inside the frame after the crop changed. */
 export function reclampAll(): void {
   const v = store.video;
   if (!v) return;
+  reclampTexts();
   let changed = false;
   for (const wm of v.watermarks) {
     const next = clampPlacement({ nx: wm.nx, ny: wm.ny, scale: wm.scale }, wm.aspect, cropSize(), wm.content);

@@ -272,34 +272,60 @@ impl QueueState {
     }
 }
 
-/// The queue on disk (`queue.json` in the app data folder).
+/// How many channels can be read at once: the columns of the queue on the start screen.
+pub const SLOTS: usize = 2;
+
+/// What `queue.json` holds: one queue per column.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+struct QueueFile {
+    slots: Vec<QueueState>,
+}
+
+/// Read `queue.json`. Before there were two columns the file was a single queue, which
+/// becomes the first column. Anything damaged starts empty rather than stopping the app.
+fn parse_queue_file(text: &str) -> Vec<QueueState> {
+    let mut slots = match serde_json::from_str::<QueueFile>(text) {
+        Ok(file) if !file.slots.is_empty() => file.slots,
+        _ => serde_json::from_str::<QueueState>(text)
+            .map(|single| vec![single])
+            .unwrap_or_default(),
+    };
+    slots.resize_with(SLOTS, QueueState::default);
+    slots.truncate(SLOTS);
+    slots
+}
+
+/// The queues on disk (`queue.json` in the app data folder).
 pub struct QueueStore {
     path: PathBuf,
-    state: Mutex<QueueState>,
+    slots: Mutex<Vec<QueueState>>,
 }
 
 impl QueueStore {
-    /// A missing or damaged file starts an empty queue rather than stopping the app.
     pub fn new(path: PathBuf) -> QueueStore {
-        let state = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default();
+        let slots = std::fs::read_to_string(&path)
+            .map(|text| parse_queue_file(&text))
+            .unwrap_or_else(|_| parse_queue_file(""));
         QueueStore {
             path,
-            state: Mutex::new(state),
+            slots: Mutex::new(slots),
         }
     }
 
-    pub fn snapshot(&self) -> QueueState {
-        self.state.lock().unwrap().clone()
+    /// The queue of one column (`slot` is below [`SLOTS`]).
+    pub fn snapshot(&self, slot: usize) -> QueueState {
+        self.slots.lock().unwrap()[slot].clone()
     }
 
-    /// Change the queue and save it before returning.
-    pub fn update<T>(&self, change: impl FnOnce(&mut QueueState) -> T) -> io::Result<T> {
-        let mut state = self.state.lock().unwrap();
-        let result = change(&mut state);
-        write_json_atomic(&self.path, &*state)?;
+    pub fn snapshots(&self) -> Vec<QueueState> {
+        self.slots.lock().unwrap().clone()
+    }
+
+    /// Change one column's queue and save everything before returning.
+    pub fn update<T>(&self, slot: usize, change: impl FnOnce(&mut QueueState) -> T) -> io::Result<T> {
+        let mut slots = self.slots.lock().unwrap();
+        let result = change(&mut slots[slot]);
+        write_json_atomic(&self.path, &QueueFile { slots: slots.clone() })?;
         Ok(result)
     }
 }
@@ -581,25 +607,99 @@ mod tests {
     }
 
     #[test]
-    fn the_queue_survives_a_restart_and_a_damaged_file_starts_empty() {
+    fn the_queues_survive_a_restart_and_a_damaged_file_starts_empty() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("data").join("queue.json");
         let store = QueueStore::new(path.clone());
         store
-            .update(|s| {
+            .update(0, |s| {
                 s.set_channel("my_links");
                 s.apply_posts(vec![post(7, &[REEL])], 9)
             })
             .unwrap();
+        store
+            .update(1, |s| {
+                s.set_channel("other_channel");
+                s.apply_posts(vec![post(3, &[TIKTOK])], 10)
+            })
+            .unwrap();
 
-        let mut reopened = QueueStore::new(path.clone()).snapshot();
-        assert_eq!(reopened.channel.as_deref(), Some("my_links"));
-        assert_eq!(reopened.items.len(), 1);
-        assert_eq!(reopened.last_refreshed, Some(9));
+        let reopened = QueueStore::new(path.clone());
+        let mut first = reopened.snapshot(0);
+        let second = reopened.snapshot(1);
+        assert_eq!(first.channel.as_deref(), Some("my_links"));
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(first.last_refreshed, Some(9));
+        assert_eq!(second.channel.as_deref(), Some("other_channel"));
+        assert_eq!(second.items[0].url, TIKTOK);
         // What was already read stays read.
-        assert_eq!(reopened.apply_posts(vec![post(7, &[REEL])], 10), 0);
+        assert_eq!(first.apply_posts(vec![post(7, &[REEL])], 10), 0);
 
         std::fs::write(&path, "{ not json").unwrap();
-        assert_eq!(QueueStore::new(path).snapshot(), QueueState::default());
+        let damaged = QueueStore::new(path);
+        assert_eq!(damaged.snapshots(), vec![QueueState::default(); SLOTS]);
+    }
+
+    #[test]
+    fn the_columns_are_independent() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = QueueStore::new(dir.path().join("queue.json"));
+        store.update(0, |s| s.set_channel("first_channel")).unwrap();
+        store.update(1, |s| s.set_channel("second_channel")).unwrap();
+        store
+            .update(0, |s| s.apply_posts(vec![post(1, &[REEL])], 1))
+            .unwrap();
+        assert_eq!(store.snapshot(0).items.len(), 1);
+        assert!(store.snapshot(1).items.is_empty());
+        store.update(0, |s| s.disconnect()).unwrap();
+        assert_eq!(store.snapshot(0), QueueState::default());
+        assert_eq!(store.snapshot(1).channel.as_deref(), Some("second_channel"));
+    }
+
+    #[test]
+    fn a_queue_from_before_there_were_two_columns_becomes_the_first_column() {
+        // `queue.json` exactly as the single-channel versions wrote it.
+        let old = r#"{
+          "channel": "my_links",
+          "items": [{"id": 3, "url": "https://x.com/jack/status/20", "platform": "twitter", "addedAt": 1800000000}],
+          "lastRefreshed": 1800000100,
+          "seenUpTo": 42,
+          "nextId": 3
+        }"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("queue.json");
+        std::fs::write(&path, old).unwrap();
+
+        let store = QueueStore::new(path.clone());
+        let mut first = store.snapshot(0);
+        assert_eq!(first.channel.as_deref(), Some("my_links"));
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(first.seen_up_to(), 42);
+        // Reading continues where it stopped: nothing old is queued again.
+        assert_eq!(
+            first.apply_posts(vec![post(42, &[REEL]), post(43, &[TIKTOK])], 5),
+            1
+        );
+        assert_eq!(store.snapshot(1), QueueState::default());
+
+        // The next save writes the new format, and it reads back the same.
+        store.update(1, |s| s.set_channel("second_channel")).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("\"slots\""), "{saved}");
+        let again = QueueStore::new(path);
+        assert_eq!(again.snapshot(0).items.len(), 1);
+        assert_eq!(again.snapshot(1).channel.as_deref(), Some("second_channel"));
+    }
+
+    #[test]
+    fn a_file_with_the_wrong_number_of_columns_is_made_to_fit() {
+        let three = r#"{"slots":[{"channel":"a_channel"},{"channel":"b_channel"},{"channel":"c_channel"}]}"#;
+        assert_eq!(parse_queue_file(three).len(), SLOTS);
+        assert_eq!(parse_queue_file(three)[1].channel.as_deref(), Some("b_channel"));
+        let one = r#"{"slots":[{"channel":"a_channel"}]}"#;
+        assert_eq!(parse_queue_file(one).len(), SLOTS);
+        assert_eq!(parse_queue_file(one)[1], QueueState::default());
+        assert_eq!(parse_queue_file("").len(), SLOTS);
+        assert_eq!(parse_queue_file("{}").len(), SLOTS);
     }
 }
