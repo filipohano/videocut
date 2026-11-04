@@ -9,7 +9,6 @@
 use crate::links::{parse_link, Platform};
 use crate::settings::write_json_atomic;
 use serde::{Deserialize, Serialize};
-use std::io;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use thiserror::Error;
@@ -272,61 +271,211 @@ impl QueueState {
     }
 }
 
-/// How many channels can be read at once: the columns of the queue on the start screen.
-pub const SLOTS: usize = 2;
+/// The most channels the app reads. Every one of them is read every 30 minutes, and Telegram
+/// would start refusing an app that reads very many channels that often.
+pub const MAX_QUEUES: usize = 20;
 
-/// What `queue.json` holds: one queue per column.
+/// One Telegram channel and the links waiting from it.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Queue {
+    /// Never reused, so a queue that is removed and another one added can't be mixed up.
+    pub id: u64,
+    #[serde(flatten)]
+    pub state: QueueState,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum QueueError {
+    #[error("t.me/{0} is already one of your queues.")]
+    Duplicate(String),
+    #[error("You can have at most {MAX_QUEUES} queues. Remove one you don't use first.")]
+    TooMany,
+    #[error("That queue isn't there any more.")]
+    Missing,
+    #[error("Couldn't save the queue: {0}")]
+    Io(String),
+}
+
+/// What `queue.json` holds.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 struct QueueFile {
+    queues: Vec<Queue>,
+    next_queue_id: u64,
+}
+
+/// The two-column versions wrote `{"slots": [...]}`.
+#[derive(Deserialize)]
+struct SlotsFile {
     slots: Vec<QueueState>,
 }
 
-/// Read `queue.json`. Before there were two columns the file was a single queue, which
-/// becomes the first column. Anything damaged starts empty rather than stopping the app.
-fn parse_queue_file(text: &str) -> Vec<QueueState> {
-    let mut slots = match serde_json::from_str::<QueueFile>(text) {
-        Ok(file) if !file.slots.is_empty() => file.slots,
-        _ => serde_json::from_str::<QueueState>(text)
-            .map(|single| vec![single])
-            .unwrap_or_default(),
+/// Read `queue.json`. Files from older versions (one channel, then two columns) become a list
+/// of queues, keeping their order and everything already read. Anything damaged starts empty
+/// rather than stopping the app.
+fn parse_queue_file(text: &str) -> QueueFile {
+    let value: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+    let states: Vec<QueueState> = if value.get("queues").is_some() {
+        let mut file: QueueFile = serde_json::from_value(value).unwrap_or_default();
+        file.queues.retain(|q| q.state.channel.is_some());
+        file.queues.truncate(MAX_QUEUES);
+        // Ids must be unique and below the next one, whatever the file says.
+        let mut seen = std::collections::HashSet::new();
+        let mut next = file
+            .queues
+            .iter()
+            .map(|q| q.id)
+            .max()
+            .unwrap_or(0)
+            .max(file.next_queue_id);
+        for q in &mut file.queues {
+            if q.id == 0 || !seen.insert(q.id) {
+                next += 1;
+                q.id = next;
+                seen.insert(q.id);
+            }
+        }
+        file.next_queue_id = next;
+        return file;
+    } else if value.get("slots").is_some() {
+        serde_json::from_value::<SlotsFile>(value)
+            .map(|f| f.slots)
+            .unwrap_or_default()
+    } else {
+        serde_json::from_value::<QueueState>(value)
+            .map(|s| vec![s])
+            .unwrap_or_default()
     };
-    slots.resize_with(SLOTS, QueueState::default);
-    slots.truncate(SLOTS);
-    slots
+    let mut file = QueueFile::default();
+    for state in states
+        .into_iter()
+        .filter(|s| s.channel.is_some())
+        .take(MAX_QUEUES)
+    {
+        file.next_queue_id += 1;
+        file.queues.push(Queue {
+            id: file.next_queue_id,
+            state,
+        });
+    }
+    file
 }
 
-/// The queues on disk (`queue.json` in the app data folder).
+/// The queues on disk (`queue.json` in the app data folder), in the order they were added.
 pub struct QueueStore {
     path: PathBuf,
-    slots: Mutex<Vec<QueueState>>,
+    file: Mutex<QueueFile>,
 }
 
 impl QueueStore {
     pub fn new(path: PathBuf) -> QueueStore {
-        let slots = std::fs::read_to_string(&path)
+        let file = std::fs::read_to_string(&path)
             .map(|text| parse_queue_file(&text))
-            .unwrap_or_else(|_| parse_queue_file(""));
+            .unwrap_or_default();
         QueueStore {
             path,
-            slots: Mutex::new(slots),
+            file: Mutex::new(file),
         }
     }
 
-    /// The queue of one column (`slot` is below [`SLOTS`]).
-    pub fn snapshot(&self, slot: usize) -> QueueState {
-        self.slots.lock().unwrap()[slot].clone()
+    pub fn list(&self) -> Vec<Queue> {
+        self.file.lock().unwrap().queues.clone()
     }
 
-    pub fn snapshots(&self) -> Vec<QueueState> {
-        self.slots.lock().unwrap().clone()
+    pub fn get(&self, id: u64) -> Option<Queue> {
+        self.file
+            .lock()
+            .unwrap()
+            .queues
+            .iter()
+            .find(|q| q.id == id)
+            .cloned()
     }
 
-    /// Change one column's queue and save everything before returning.
-    pub fn update<T>(&self, slot: usize, change: impl FnOnce(&mut QueueState) -> T) -> io::Result<T> {
-        let mut slots = self.slots.lock().unwrap();
-        let result = change(&mut slots[slot]);
-        write_json_atomic(&self.path, &QueueFile { slots: slots.clone() })?;
+    /// The queue already reading `channel` (Telegram ignores capitals, so this does too).
+    pub fn find_channel(&self, channel: &str) -> Option<Queue> {
+        self.file
+            .lock()
+            .unwrap()
+            .queues
+            .iter()
+            .find(|q| {
+                q.state
+                    .channel
+                    .as_deref()
+                    .is_some_and(|c| c.eq_ignore_ascii_case(channel))
+            })
+            .cloned()
+    }
+
+    /// Whether another queue may be added for `channel` (before it is read from Telegram).
+    pub fn can_add(&self, channel: &str) -> Result<(), QueueError> {
+        if let Some(existing) = self.find_channel(channel) {
+            return Err(QueueError::Duplicate(existing.state.channel.unwrap_or_default()));
+        }
+        if self.file.lock().unwrap().queues.len() >= MAX_QUEUES {
+            return Err(QueueError::TooMany);
+        }
+        Ok(())
+    }
+
+    /// Add a queue for `channel` at the end, let `fill` put its first links in, and save.
+    pub fn add<T>(
+        &self,
+        channel: &str,
+        fill: impl FnOnce(&mut QueueState) -> T,
+    ) -> Result<(Queue, T), QueueError> {
+        let mut file = self.file.lock().unwrap();
+        // Checked again here: the same channel may have been added while it was being read.
+        if let Some(existing) = file.queues.iter().find(|q| {
+            q.state
+                .channel
+                .as_deref()
+                .is_some_and(|c| c.eq_ignore_ascii_case(channel))
+        }) {
+            return Err(QueueError::Duplicate(
+                existing.state.channel.clone().unwrap_or_default(),
+            ));
+        }
+        if file.queues.len() >= MAX_QUEUES {
+            return Err(QueueError::TooMany);
+        }
+        let mut state = QueueState::default();
+        state.set_channel(channel);
+        let result = fill(&mut state);
+        file.next_queue_id += 1;
+        let queue = Queue {
+            id: file.next_queue_id,
+            state,
+        };
+        file.queues.push(queue.clone());
+        write_json_atomic(&self.path, &*file).map_err(|e| QueueError::Io(e.to_string()))?;
+        Ok((queue, result))
+    }
+
+    /// Change one queue and save everything before returning.
+    pub fn update<T>(&self, id: u64, change: impl FnOnce(&mut QueueState) -> T) -> Result<T, QueueError> {
+        let mut file = self.file.lock().unwrap();
+        let queue = file
+            .queues
+            .iter_mut()
+            .find(|q| q.id == id)
+            .ok_or(QueueError::Missing)?;
+        let result = change(&mut queue.state);
+        write_json_atomic(&self.path, &*file).map_err(|e| QueueError::Io(e.to_string()))?;
         Ok(result)
+    }
+
+    /// Stop reading a channel and forget its links. Removing one that is already gone is fine.
+    pub fn remove(&self, id: u64) -> Result<(), QueueError> {
+        let mut file = self.file.lock().unwrap();
+        let before = file.queues.len();
+        file.queues.retain(|q| q.id != id);
+        if file.queues.len() != before {
+            write_json_atomic(&self.path, &*file).map_err(|e| QueueError::Io(e.to_string()))?;
+        }
+        Ok(())
     }
 }
 
@@ -611,53 +760,89 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("data").join("queue.json");
         let store = QueueStore::new(path.clone());
-        store
-            .update(0, |s| {
-                s.set_channel("my_links");
-                s.apply_posts(vec![post(7, &[REEL])], 9)
-            })
+        let (first, _) = store
+            .add("my_links", |s| s.apply_posts(vec![post(7, &[REEL])], 9))
             .unwrap();
-        store
-            .update(1, |s| {
-                s.set_channel("other_channel");
-                s.apply_posts(vec![post(3, &[TIKTOK])], 10)
-            })
+        let (second, _) = store
+            .add("other_channel", |s| s.apply_posts(vec![post(3, &[TIKTOK])], 10))
             .unwrap();
+        assert_ne!(first.id, second.id);
 
         let reopened = QueueStore::new(path.clone());
-        let mut first = reopened.snapshot(0);
-        let second = reopened.snapshot(1);
-        assert_eq!(first.channel.as_deref(), Some("my_links"));
-        assert_eq!(first.items.len(), 1);
-        assert_eq!(first.last_refreshed, Some(9));
-        assert_eq!(second.channel.as_deref(), Some("other_channel"));
-        assert_eq!(second.items[0].url, TIKTOK);
+        let list = reopened.list();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, first.id);
+        assert_eq!(list[0].state.channel.as_deref(), Some("my_links"));
+        assert_eq!(list[0].state.items.len(), 1);
+        assert_eq!(list[0].state.last_refreshed, Some(9));
+        assert_eq!(list[1].state.channel.as_deref(), Some("other_channel"));
+        assert_eq!(list[1].state.items[0].url, TIKTOK);
         // What was already read stays read.
-        assert_eq!(first.apply_posts(vec![post(7, &[REEL])], 10), 0);
+        let mut again = list[0].state.clone();
+        assert_eq!(again.apply_posts(vec![post(7, &[REEL])], 10), 0);
 
         std::fs::write(&path, "{ not json").unwrap();
-        let damaged = QueueStore::new(path);
-        assert_eq!(damaged.snapshots(), vec![QueueState::default(); SLOTS]);
+        assert!(QueueStore::new(path).list().is_empty());
     }
 
     #[test]
-    fn the_columns_are_independent() {
+    fn queues_are_independent_and_removing_one_leaves_the_rest() {
         let dir = tempfile::tempdir().unwrap();
         let store = QueueStore::new(dir.path().join("queue.json"));
-        store.update(0, |s| s.set_channel("first_channel")).unwrap();
-        store.update(1, |s| s.set_channel("second_channel")).unwrap();
+        let ids: Vec<u64> = ["one_channel", "two_channel", "three_channel"]
+            .iter()
+            .map(|c| store.add(c, |_| ()).unwrap().0.id)
+            .collect();
         store
-            .update(0, |s| s.apply_posts(vec![post(1, &[REEL])], 1))
+            .update(ids[1], |s| s.apply_posts(vec![post(1, &[REEL])], 1))
             .unwrap();
-        assert_eq!(store.snapshot(0).items.len(), 1);
-        assert!(store.snapshot(1).items.is_empty());
-        store.update(0, |s| s.disconnect()).unwrap();
-        assert_eq!(store.snapshot(0), QueueState::default());
-        assert_eq!(store.snapshot(1).channel.as_deref(), Some("second_channel"));
+        assert_eq!(store.get(ids[1]).unwrap().state.items.len(), 1);
+        assert!(store.get(ids[0]).unwrap().state.items.is_empty());
+
+        store.remove(ids[1]).unwrap();
+        store.remove(ids[1]).unwrap(); // already gone: fine
+        let left: Vec<_> = store.list().iter().map(|q| q.id).collect();
+        assert_eq!(left, vec![ids[0], ids[2]]);
+        assert_eq!(store.update(ids[1], |_| ()), Err(QueueError::Missing));
+
+        // A new queue never gets the number of one that was removed.
+        let (fresh, _) = store.add("four_channel", |_| ()).unwrap();
+        assert!(fresh.id > ids[2]);
     }
 
     #[test]
-    fn a_queue_from_before_there_were_two_columns_becomes_the_first_column() {
+    fn a_channel_is_only_queued_once_whatever_its_capitals() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = QueueStore::new(dir.path().join("queue.json"));
+        store.add("My_Links", |_| ()).unwrap();
+        assert_eq!(
+            store.can_add("my_links"),
+            Err(QueueError::Duplicate("My_Links".into()))
+        );
+        assert_eq!(
+            store.add("MY_LINKS", |_| ()).unwrap_err(),
+            QueueError::Duplicate("My_Links".into())
+        );
+        assert_eq!(store.list().len(), 1);
+    }
+
+    #[test]
+    fn there_is_a_limit_on_how_many_channels_are_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = QueueStore::new(dir.path().join("queue.json"));
+        for i in 0..MAX_QUEUES {
+            store.add(&format!("channel_{i}"), |_| ()).unwrap();
+        }
+        assert_eq!(store.can_add("one_too_many"), Err(QueueError::TooMany));
+        assert_eq!(
+            store.add("one_too_many", |_| ()).unwrap_err(),
+            QueueError::TooMany
+        );
+        assert_eq!(store.list().len(), MAX_QUEUES);
+    }
+
+    #[test]
+    fn a_queue_from_the_single_channel_versions_is_kept() {
         // `queue.json` exactly as the single-channel versions wrote it.
         let old = r#"{
           "channel": "my_links",
@@ -671,7 +856,9 @@ mod tests {
         std::fs::write(&path, old).unwrap();
 
         let store = QueueStore::new(path.clone());
-        let mut first = store.snapshot(0);
+        let list = store.list();
+        assert_eq!(list.len(), 1);
+        let mut first = list[0].state.clone();
         assert_eq!(first.channel.as_deref(), Some("my_links"));
         assert_eq!(first.items.len(), 1);
         assert_eq!(first.seen_up_to(), 42);
@@ -680,26 +867,47 @@ mod tests {
             first.apply_posts(vec![post(42, &[REEL]), post(43, &[TIKTOK])], 5),
             1
         );
-        assert_eq!(store.snapshot(1), QueueState::default());
 
         // The next save writes the new format, and it reads back the same.
-        store.update(1, |s| s.set_channel("second_channel")).unwrap();
+        store.add("second_channel", |_| ()).unwrap();
         let saved = std::fs::read_to_string(&path).unwrap();
-        assert!(saved.contains("\"slots\""), "{saved}");
+        assert!(saved.contains("\"queues\""), "{saved}");
         let again = QueueStore::new(path);
-        assert_eq!(again.snapshot(0).items.len(), 1);
-        assert_eq!(again.snapshot(1).channel.as_deref(), Some("second_channel"));
+        assert_eq!(again.list()[0].state.items.len(), 1);
+        assert_eq!(again.list()[0].state.seen_up_to(), 42);
+        assert_eq!(again.list()[1].state.channel.as_deref(), Some("second_channel"));
     }
 
     #[test]
-    fn a_file_with_the_wrong_number_of_columns_is_made_to_fit() {
-        let three = r#"{"slots":[{"channel":"a_channel"},{"channel":"b_channel"},{"channel":"c_channel"}]}"#;
-        assert_eq!(parse_queue_file(three).len(), SLOTS);
-        assert_eq!(parse_queue_file(three)[1].channel.as_deref(), Some("b_channel"));
-        let one = r#"{"slots":[{"channel":"a_channel"}]}"#;
-        assert_eq!(parse_queue_file(one).len(), SLOTS);
-        assert_eq!(parse_queue_file(one)[1], QueueState::default());
-        assert_eq!(parse_queue_file("").len(), SLOTS);
-        assert_eq!(parse_queue_file("{}").len(), SLOTS);
+    fn the_two_columns_of_the_last_version_become_two_queues() {
+        let two = r#"{"slots":[{"channel":"left_channel","seenUpTo":9,"items":[{"id":1,"url":"https://x.com/jack/status/20","platform":"twitter","addedAt":1}]},{"channel":"right_channel"}]}"#;
+        let file = parse_queue_file(two);
+        assert_eq!(file.queues.len(), 2);
+        assert_eq!(file.queues[0].state.channel.as_deref(), Some("left_channel"));
+        assert_eq!(file.queues[0].state.seen_up_to(), 9);
+        assert_eq!(file.queues[0].state.items.len(), 1);
+        assert_eq!(file.queues[1].state.channel.as_deref(), Some("right_channel"));
+        assert_ne!(file.queues[0].id, file.queues[1].id);
+        assert!(file.next_queue_id >= 2);
+
+        // A column without a channel was just an empty column, not a queue.
+        let only_right = r#"{"slots":[{},{"channel":"right_channel"}]}"#;
+        assert_eq!(parse_queue_file(only_right).queues.len(), 1);
+        assert!(parse_queue_file("").queues.is_empty());
+        assert!(parse_queue_file("{}").queues.is_empty());
+    }
+
+    #[test]
+    fn a_hand_edited_file_with_clashing_numbers_is_repaired() {
+        let text = r#"{"queues":[{"id":3,"channel":"a_channel"},{"id":3,"channel":"b_channel"},{"id":0,"channel":"c_channel"},{"id":9}],"nextQueueId":1}"#;
+        let file = parse_queue_file(text);
+        let ids: Vec<u64> = file.queues.iter().map(|q| q.id).collect();
+        assert_eq!(file.queues.len(), 3, "a queue without a channel is dropped");
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(unique.len(), 3, "{ids:?}");
+        assert!(
+            ids.iter().all(|id| *id > 0 && *id <= file.next_queue_id),
+            "{ids:?}"
+        );
     }
 }

@@ -26,16 +26,22 @@ pub struct Harness {
 }
 
 pub fn harness() -> Option<Harness> {
+    harness_with_data(|_| {})
+}
+
+/// A harness whose app data folder is first filled by `prepare` (files from an older version).
+pub fn harness_with_data(prepare: impl FnOnce(&std::path::Path)) -> Option<Harness> {
     if !have("ffmpeg") || !have("ffprobe") {
         eprintln!("skipping: ffmpeg/ffprobe not available");
         return None;
     }
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("data")).unwrap();
+    prepare(&dir.path().join("data"));
     let app = register_commands(mock_builder())
         .build(mock_context(noop_assets()))
         .unwrap();
     app.manage(AppState::new(dir.path().join("data"), dir.path().join("cache")));
-    std::fs::create_dir_all(dir.path().join("data")).unwrap();
     let win = WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();

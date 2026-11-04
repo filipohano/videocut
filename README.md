@@ -15,12 +15,13 @@ Download, crop, trim and watermark videos on your Mac or Windows PC — everythi
   Music links) download as an H.264 mp4 with sound, up to 1080p. A video inside a playlist link is just that video;
   playlists and channels aren't downloaded. A live stream that hasn't ended yet is refused instead of downloading
   forever.
-- **Telegram queue.** Share TikTok, Instagram, X and YouTube links from your phone to a Telegram channel of your own, and
-  they wait in a queue on the start screen: one tap opens one for editing. There are **two columns side by side**,
-  one per channel, so you can run two channels at once; you choose the channels in Settings. The app reads each
-  channel when it launches and every 30 minutes while it's open (each column has its own **Refresh**, which reads
-  that channel at once and starts its 30 minutes over). Everyone uses their own channels, so your links only ever
-  reach your own copy of the app. No bot and no server, see [Telegram queue](#telegram-queue).
+- **Telegram queue.** Share TikTok, Instagram, X and YouTube links from your phone to Telegram channels of your own,
+  and they wait in queues on the start screen: one tap opens one for editing. Add as many channels as you like
+  with **+ Add channel** (one queue per channel), show **1 column or 2 columns**, and pick which queue each column
+  shows in its drop-down (which also shows how many links wait in every queue). The app reads every channel when
+  it launches and every 30 minutes while it's open (each queue has its own **Refresh**, which reads that channel
+  at once and starts its 30 minutes over). Everyone uses their own channels, so your links only ever reach your
+  own copy of the app. No bot and no server, see [Telegram queue](#telegram-queue).
 - **Photos too**: open a JPG, PNG or WebP and crop it, add watermarks and text, and export as JPG (with a quality
   slider) or PNG (lossless, keeps transparency). Phone photos that are stored sideways are handled.
 - **Editor** with a large live preview: drag-to-crop with aspect-ratio presets, trim in/out, and an exact
@@ -110,12 +111,12 @@ Collect links on your phone and open them on your computer, without copying anyt
 
 1. In Telegram, create a channel (*New Channel*) and make it **Public** with a username of your own, for example
    `my_links` (*Channel settings → Channel type → Public*).
-2. In FillernCut, open **Settings**, and under **Telegram queue** type that username in the left column and press
-   **Save**. (A second channel goes in the right column; the same channel can't be in both.)
+2. In FillernCut, type that username under **Telegram queue** on the start screen and press **Add** (later
+   channels: **+ Add channel**, or **Settings → Telegram queue**).
 3. On your phone, share TikTok, Instagram, X and YouTube links to the channel (*Share → Telegram → your channel*, or just
    paste them there).
 
-They appear in that channel's column of the queue on the start screen; tap one to download it and open it in the editor.
+They appear in that channel's queue on the start screen; tap one to download it and open it in the editor.
 
 - **When it updates.** The channel is read at launch and then every 30 minutes while the app is open. **Refresh**
   reads it straight away and restarts the 30 minutes. A refresh follows the channel back through the newest
@@ -127,10 +128,13 @@ They appear in that channel's column of the queue on the start screen; tap one t
   (`t.me/s/<name>`) directly from your computer, with no bot, no account and no server in between. Telegram doesn't
   show private channels there. It also means anyone who knows the name can read the channel, so pick a name nobody
   would guess and only post links there. Only a channel's admins can post in it, so nobody else can fill your queue.
-- **Two columns.** Each column reads its own channel and keeps its own links, so the two never mix. If you only
-  use one channel, the other column just stays empty (you can ignore it). Existing setups keep working: the channel
-  you already had is the left column.
-- **Everyone has their own queue.** Each person types their own channel, so a link posted to yours never reaches
+- **Many queues, one or two columns.** Each queue reads its own channel and keeps its own links, so they never
+  mix. Choose **1 column** or **2 columns** above the queues, and pick which queue a column shows in its
+  drop-down; the app remembers your choice. Every queue is read in the background, also the ones not shown,
+  and a note tells you when new links arrive in one you can't see. Up to 20 channels can be read (Telegram
+  would start refusing an app that reads very many every 30 minutes). **Remove queue** stops reading a channel
+  and forgets its links; the channel itself isn't touched. Channels you set up in an earlier version are kept.
+- **Everyone has their own queues.** Each person types their own channels, so a link posted to yours never reaches
   anyone else's copy of the app. (Two people who type the same channel share it.)
 - **If it stops filling.** The web view is Telegram's, not a documented interface. If Telegram changes it, update
   FillernCut; the queue then keeps working again.

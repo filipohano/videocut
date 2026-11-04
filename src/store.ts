@@ -39,7 +39,7 @@ export type Topic =
   | "quality"
   | "undo" // undo/redo availability changed
   | "settings"
-  | "queue" // a Telegram queue column changed (channel, links)
+  | "queue" // the Telegram queues changed (added, removed, new links)
   | "update"
   | "busy"
   | "playhead";
@@ -66,7 +66,7 @@ class Store {
   /** Encoders that work on this machine. */
   encoders: { id: string; label: string }[] = [];
   update: UpdateInfo | null = null;
-  /** The Telegram queue, one entry per column. */
+  /** The Telegram queues, in the order they were added. */
   queue: QueueView[] = [];
   /** True while a download / export / preview is running. */
   busy = false;

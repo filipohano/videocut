@@ -160,41 +160,44 @@ fn urls(view: &Value) -> Vec<String> {
         .collect()
 }
 
-/// Set the channel of the left column.
-fn set(h: &Harness, channel: &str) -> Result<Value, Value> {
-    set_slot(h, 0, channel)
+/// Add a queue for a channel.
+fn add(h: &Harness, channel: &str) -> Result<Value, Value> {
+    call(&h.win, "queue_add", json!({ "input": channel }))
 }
 
-fn set_slot(h: &Harness, slot: usize, channel: &str) -> Result<Value, Value> {
-    call(
-        &h.win,
-        "queue_set_channel",
-        json!({ "slot": slot, "input": channel }),
-    )
+/// Add a queue and give back its id.
+fn add_id(h: &Harness, channel: &str) -> u64 {
+    add(h, channel).unwrap()["view"]["id"].as_u64().unwrap()
 }
 
-fn refresh(h: &Harness, slot: usize) -> Result<Value, Value> {
-    call(&h.win, "queue_refresh", json!({ "slot": slot }))
+fn refresh(h: &Harness, id: u64) -> Result<Value, Value> {
+    call(&h.win, "queue_refresh", json!({ "id": id }))
 }
 
-/// The queue of one column, as `queue_get` reports it.
-fn column(h: &Harness, slot: usize) -> Value {
-    call(&h.win, "queue_get", json!({})).unwrap()[slot].clone()
+fn all(h: &Harness) -> Vec<Value> {
+    call(&h.win, "queue_get", json!({}))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+/// One queue, as `queue_get` reports it.
+fn queue(h: &Harness, id: u64) -> Value {
+    all(h)
+        .into_iter()
+        .find(|q| q["id"] == id)
+        .expect("queue is there")
+}
+
+fn remove_item(h: &Harness, id: u64, item: i64) -> Value {
+    call(&h.win, "queue_remove_item", json!({ "queue": id, "item": item })).unwrap()
 }
 
 #[test]
-fn a_new_app_has_two_empty_columns() {
+fn a_new_app_has_no_queues() {
     let Some(h) = harness() else { return };
-    let views = call(&h.win, "queue_get", json!({})).unwrap();
-    let views = views.as_array().unwrap();
-    assert_eq!(views.len(), 2);
-    for (slot, view) in views.iter().enumerate() {
-        assert_eq!(view["slot"], slot);
-        assert!(view["channel"].is_null());
-        assert_eq!(view["items"].as_array().unwrap().len(), 0);
-        // Refreshing a column without a channel is not an error: there is just nothing to read.
-        assert_eq!(refresh(&h, slot).unwrap()["added"], 0);
-    }
+    assert!(all(&h).is_empty());
 }
 
 #[test]
@@ -210,9 +213,10 @@ fn a_channel_is_read_and_its_links_queued_in_the_order_they_were_posted() {
         ],
     );
 
-    let result = set(&h, "https://t.me/inorder_links").unwrap();
+    let result = add(&h, "https://t.me/inorder_links").unwrap();
     assert_eq!(result["added"], 3);
     let view = &result["view"];
+    assert!(view["id"].as_u64().unwrap() > 0);
     assert_eq!(view["channel"], "inorder_links");
     assert_eq!(urls(view), vec![REEL, TIKTOK, TWEET]);
     assert_eq!(view["items"][0]["platform"], "instagram");
@@ -221,6 +225,7 @@ fn a_channel_is_read_and_its_links_queued_in_the_order_they_were_posted() {
     // Post 1 was posted 2026-01-02 03:01 UTC: the time of the post, not of the refresh.
     assert_eq!(view["items"][0]["addedAt"], 1_767_322_860i64);
     assert!(view["lastRefreshed"].as_i64().unwrap() > 1_700_000_000);
+    assert_eq!(all(&h).len(), 1);
 }
 
 #[test]
@@ -229,18 +234,20 @@ fn only_new_posts_are_added_later_and_paging_follows_back_to_where_it_stopped() 
     server();
     let name = "paging_links";
     open_channel(name, (1..=3).map(|n| (n, link(&tweet(n)))).collect());
-    assert_eq!(set(&h, name).unwrap()["added"], 3);
+    let result = add(&h, name).unwrap();
+    assert_eq!(result["added"], 3);
+    let id = result["view"]["id"].as_u64().unwrap();
     assert_eq!(requests(name), 1);
 
     // Nothing new: one request, nothing added.
-    assert_eq!(refresh(&h, 0).unwrap()["added"], 0);
+    assert_eq!(refresh(&h, id).unwrap()["added"], 0);
     assert_eq!(requests(name), 2);
 
     // 12 new posts: three pages of five are needed to get back to post 3.
     for n in 4..=15 {
         post_link(name, n, &tweet(n));
     }
-    let refreshed = refresh(&h, 0).unwrap();
+    let refreshed = refresh(&h, id).unwrap();
     assert_eq!(refreshed["added"], 12);
     assert_eq!(requests(name), 2 + 3);
     let all = urls(&refreshed["view"]);
@@ -258,12 +265,12 @@ fn a_refresh_never_reads_more_than_five_pages() {
     server();
     let name = "many_links";
     open_channel(name, vec![(1, link(&tweet(1)))]);
-    set(&h, name).unwrap();
+    let id = add_id(&h, name);
     let before = requests(name);
     for n in 2..=100 {
         post_link(name, n, &tweet(n));
     }
-    let refreshed = refresh(&h, 0).unwrap();
+    let refreshed = refresh(&h, id).unwrap();
     assert_eq!(requests(name) - before, 5);
     // The newest 25 were read; the app doesn't go digging through all of history.
     assert_eq!(refreshed["added"], 25);
@@ -271,18 +278,19 @@ fn a_refresh_never_reads_more_than_five_pages() {
 }
 
 #[test]
-fn connecting_to_an_old_channel_picks_up_its_newest_posts_only() {
+fn adding_an_old_channel_picks_up_its_newest_posts_only() {
     let Some(h) = harness() else { return };
     server();
     let name = "old_channel";
     // 40 posts, five to a page: three pages are read, so the newest 15.
     open_channel(name, (1..=40).map(|n| (n, link(&tweet(n)))).collect());
-    let result = set(&h, name).unwrap();
+    let result = add(&h, name).unwrap();
+    let id = result["view"]["id"].as_u64().unwrap();
     assert_eq!(requests(name), 3);
     assert_eq!(urls(&result["view"]), (26..=40).map(tweet).collect::<Vec<_>>());
     // What is older than that is skipped for good, not trickled in later.
     post_link(name, 41, &tweet(41));
-    let later = refresh(&h, 0).unwrap();
+    let later = refresh(&h, id).unwrap();
     assert_eq!(later["added"], 1);
     assert_eq!(urls(&later["view"]).len(), 16);
 }
@@ -295,7 +303,7 @@ fn the_first_look_keeps_the_newest_fifty_of_what_it_read() {
     // Pages of 20 like Telegram's: three pages are 60 posts, and the newest 50 are kept.
     open_channel(name, (1..=200).map(|n| (n, link(&tweet(n)))).collect());
     server().channels.lock().unwrap().get_mut(name).unwrap().page_size = 20;
-    let result = set(&h, name).unwrap();
+    let result = add(&h, name).unwrap();
     assert_eq!(requests(name), 3);
     assert_eq!(result["added"], 50);
     assert_eq!(urls(&result["view"]), (151..=200).map(tweet).collect::<Vec<_>>());
@@ -307,7 +315,7 @@ fn a_short_channel_is_read_to_its_first_post() {
     server();
     let name = "short_channel";
     open_channel(name, (1..=12).map(|n| (n, link(&tweet(n)))).collect());
-    let result = set(&h, name).unwrap();
+    let result = add(&h, name).unwrap();
     assert_eq!(result["added"], 12);
     assert_eq!(requests(name), 3, "5 + 5 + 2 posts, and it stops at post 1");
 }
@@ -318,35 +326,37 @@ fn a_link_that_was_opened_or_removed_does_not_come_back() {
     server();
     let name = "removed_links";
     open_channel(name, vec![(1, link(REEL)), (2, link(TIKTOK))]);
-    let view = set(&h, name).unwrap()["view"].clone();
+    let view = add(&h, name).unwrap()["view"].clone();
+    let id = view["id"].as_u64().unwrap();
     let first = view["items"][0]["id"].as_i64().unwrap();
-    let after = call(&h.win, "queue_remove", json!({ "slot": 0, "id": first })).unwrap();
+    let after = remove_item(&h, id, first);
+    assert_eq!(after["id"], id);
     assert_eq!(urls(&after), vec![TIKTOK]);
 
-    let refreshed = refresh(&h, 0).unwrap();
+    let refreshed = refresh(&h, id).unwrap();
     assert_eq!(refreshed["added"], 0);
     assert_eq!(urls(&refreshed["view"]), vec![TIKTOK]);
 
     // Posting the same link again is a new post, and queues it again.
     post_link(name, 3, REEL);
-    let again = refresh(&h, 0).unwrap();
+    let again = refresh(&h, id).unwrap();
     assert_eq!(again["added"], 1);
     assert_eq!(urls(&again["view"]), vec![TIKTOK, REEL]);
 }
 
 #[test]
-fn a_channel_that_cannot_be_read_is_explained_and_not_saved() {
+fn a_channel_that_cannot_be_read_is_explained_and_not_added() {
     let Some(h) = harness() else { return };
     server();
     // Doesn't exist, or isn't public: Telegram shows no posts.
-    let err = set(&h, "@no_such_channel").unwrap_err();
+    let err = add(&h, "@no_such_channel").unwrap_err();
     assert!(err.as_str().unwrap().contains("public"), "{err}");
     open_channel("empty_channel", vec![]);
     assert!(
-        set(&h, "empty_channel").is_err(),
+        add(&h, "empty_channel").is_err(),
         "a channel without posts can't be checked"
     );
-    assert!(column(&h, 0)["channel"].is_null());
+    assert!(all(&h).is_empty());
 
     // Names that aren't channels never reach the network.
     for (input, word) in [
@@ -354,7 +364,7 @@ fn a_channel_that_cannot_be_read_is_explained_and_not_saved() {
         ("https://t.me/+AbCdEfGhIjK", "public"),
         ("", "name of your Telegram channel"),
     ] {
-        let err = set(&h, input).unwrap_err();
+        let err = add(&h, input).unwrap_err();
         assert!(err.as_str().unwrap().contains(word), "{input:?}: {err}");
     }
 }
@@ -365,11 +375,11 @@ fn trouble_reaching_telegram_is_explained_and_loses_nothing() {
     server();
     let name = "flaky_links";
     open_channel(name, vec![(1, link(REEL))]);
-    set(&h, name).unwrap();
+    let id = add_id(&h, name);
     post_link(name, 2, TIKTOK);
 
     server().channels.lock().unwrap().get_mut(name).unwrap().status = Some(503);
-    let err = refresh(&h, 0).unwrap_err();
+    let err = refresh(&h, id).unwrap_err();
     assert!(err.as_str().unwrap().contains("503"), "{err}");
     {
         let mut channels = server().channels.lock().unwrap();
@@ -377,13 +387,13 @@ fn trouble_reaching_telegram_is_explained_and_loses_nothing() {
         c.status = None;
         c.hang_up = true;
     }
-    let err = refresh(&h, 0).unwrap_err();
+    let err = refresh(&h, id).unwrap_err();
     assert!(err.as_str().unwrap().contains("Couldn't reach Telegram"), "{err}");
-    assert_eq!(urls(&column(&h, 0)), vec![REEL], "what was already there stays");
+    assert_eq!(urls(&queue(&h, id)), vec![REEL], "what was already there stays");
 
     // Once it works again the missed post arrives.
     server().channels.lock().unwrap().get_mut(name).unwrap().hang_up = false;
-    let refreshed = refresh(&h, 0).unwrap();
+    let refreshed = refresh(&h, id).unwrap();
     assert_eq!(refreshed["added"], 1);
     assert_eq!(urls(&refreshed["view"]), vec![REEL, TIKTOK]);
 }
@@ -396,45 +406,65 @@ fn two_people_only_ever_see_their_own_channel() {
     server();
     open_channel("filips_links", vec![(1, link(REEL))]);
     open_channel("maris_links", vec![(1, link(TIKTOK))]);
-    let from_a = set(&a, "@filips_links").unwrap();
-    let from_b = set(&b, "@maris_links").unwrap();
+    let from_a = add(&a, "@filips_links").unwrap();
+    let from_b = add(&b, "@maris_links").unwrap();
     assert_eq!(urls(&from_a["view"]), vec![REEL]);
     assert_eq!(urls(&from_b["view"]), vec![TIKTOK]);
+    let (ida, idb) = (
+        from_a["view"]["id"].as_u64().unwrap(),
+        from_b["view"]["id"].as_u64().unwrap(),
+    );
 
     post_link("filips_links", 2, TWEET);
-    assert_eq!(urls(&refresh(&a, 0).unwrap()["view"]), vec![REEL, TWEET]);
-    assert_eq!(urls(&refresh(&b, 0).unwrap()["view"]), vec![TIKTOK]);
+    assert_eq!(urls(&refresh(&a, ida).unwrap()["view"]), vec![REEL, TWEET]);
+    assert_eq!(urls(&refresh(&b, idb).unwrap()["view"]), vec![TIKTOK]);
+    assert_eq!(all(&a).len(), 1);
+    assert_eq!(all(&b).len(), 1);
 }
 
 #[test]
-fn changing_channel_starts_a_fresh_queue_and_disconnecting_forgets_everything() {
+fn deleting_a_queue_forgets_it_and_adding_the_channel_again_starts_over() {
     let Some(h) = harness() else { return };
     server();
-    open_channel("first_channel", vec![(1, link(REEL))]);
-    open_channel("second_channel", vec![(1, link(TIKTOK))]);
-    set(&h, "first_channel").unwrap();
-    let changed = set(&h, "second_channel").unwrap();
-    assert_eq!(urls(&changed["view"]), vec![TIKTOK]);
-
-    let view = call(&h.win, "queue_disconnect", json!({ "slot": 0 })).unwrap();
-    assert!(view["channel"].is_null());
-    assert_eq!(view["items"].as_array().unwrap().len(), 0);
-    assert_eq!(refresh(&h, 0).unwrap()["added"], 0);
-    // Connecting to the same channel again starts over and finds its latest posts.
-    assert_eq!(set(&h, "second_channel").unwrap()["added"], 1);
+    open_channel("gone_channel", vec![(1, link(REEL))]);
+    let id = add_id(&h, "gone_channel");
+    call(&h.win, "queue_delete", json!({ "id": id })).unwrap();
+    assert!(all(&h).is_empty());
+    // Deleting it again, or using it, is explained rather than crashing.
+    call(&h.win, "queue_delete", json!({ "id": id })).unwrap();
+    for (cmd, body) in [
+        ("queue_refresh", json!({ "id": id })),
+        ("queue_remove_item", json!({ "queue": id, "item": 1 })),
+    ] {
+        let err = call(&h.win, cmd, body).unwrap_err();
+        assert!(
+            err.as_str().unwrap().contains("isn't there any more"),
+            "{cmd}: {err}"
+        );
+    }
+    // Adding the same channel again is a new queue that finds its latest posts.
+    let again = add(&h, "gone_channel").unwrap();
+    assert_eq!(again["added"], 1);
+    assert_ne!(again["view"]["id"], id);
 }
 
 #[test]
-fn the_queue_is_kept_on_disk_with_nothing_secret_in_it() {
+fn the_queues_are_kept_on_disk_in_order_with_nothing_secret_in_them() {
     let Some(h) = harness() else { return };
     server();
-    open_channel("saved_links", vec![(1, link(REEL))]);
-    set(&h, "saved_links").unwrap();
+    open_channel("disk_one", vec![(1, link(REEL))]);
+    open_channel("disk_two", vec![(1, link(TIKTOK))]);
+    add(&h, "disk_one").unwrap();
+    add(&h, "disk_two").unwrap();
     let text = std::fs::read_to_string(h.dir.path().join("data/queue.json")).unwrap();
     let saved: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(saved["slots"][0]["channel"], "saved_links");
-    assert_eq!(saved["slots"][0]["items"][0]["url"], REEL);
+    assert_eq!(saved["queues"].as_array().unwrap().len(), 2);
+    assert_eq!(saved["queues"][0]["channel"], "disk_one");
+    assert_eq!(saved["queues"][0]["items"][0]["url"], REEL);
+    assert_eq!(saved["queues"][1]["items"][0]["url"], TIKTOK);
     assert!(!text.contains("token"), "{text}");
+    let names: Vec<_> = all(&h).iter().map(|q| q["channel"].clone()).collect();
+    assert_eq!(names, vec!["disk_one", "disk_two"]);
 }
 
 #[test]
@@ -453,141 +483,110 @@ fn only_a_channel_address_can_be_opened_besides_the_projects_pages() {
 }
 
 #[test]
-fn the_two_columns_read_their_own_channels_independently() {
+fn many_queues_read_their_own_channels_independently() {
     let Some(h) = harness() else { return };
     server();
-    open_channel("column_one", vec![(1, link(REEL))]);
-    open_channel("column_two", vec![(1, link(TIKTOK)), (2, link(TWEET))]);
+    let names = ["queue_one", "queue_two", "queue_three"];
+    open_channel(names[0], vec![(1, link(REEL))]);
+    open_channel(names[1], vec![(1, link(TIKTOK)), (2, link(TWEET))]);
+    open_channel(names[2], vec![(1, link(&tweet(7)))]);
+    let ids: Vec<u64> = names.iter().map(|n| add_id(&h, &format!("@{n}"))).collect();
+    assert_eq!(all(&h).len(), 3);
+    assert_eq!(urls(&queue(&h, ids[1])), vec![TIKTOK, TWEET]);
 
-    let left = set_slot(&h, 0, "@column_one").unwrap();
-    let right = set_slot(&h, 1, "@column_two").unwrap();
-    assert_eq!(left["view"]["slot"], 0);
-    assert_eq!(right["view"]["slot"], 1);
-    assert_eq!(urls(&left["view"]), vec![REEL]);
-    assert_eq!(urls(&right["view"]), vec![TIKTOK, TWEET]);
-    assert_eq!(column(&h, 0)["channel"], "column_one");
-    assert_eq!(column(&h, 1)["channel"], "column_two");
+    // New posts in one channel only reach that queue, and each refresh reads only its own.
+    let reads: Vec<usize> = names.iter().map(|n| requests(n)).collect();
+    post_link(names[0], 2, &tweet(2));
+    assert_eq!(refresh(&h, ids[0]).unwrap()["added"], 1);
+    assert_eq!(requests(names[0]), reads[0] + 1);
+    assert_eq!(requests(names[1]), reads[1], "the other queues weren't touched");
+    assert_eq!(requests(names[2]), reads[2]);
+    assert_eq!(urls(&queue(&h, ids[0])), vec![REEL, tweet(2).as_str()]);
 
-    // New posts in one channel only reach that column, and each refresh reads only its own.
-    let (reads_one, reads_two) = (requests("column_one"), requests("column_two"));
-    post_link("column_one", 2, &tweet(2));
-    assert_eq!(refresh(&h, 0).unwrap()["added"], 1);
-    assert_eq!(requests("column_one"), reads_one + 1);
-    assert_eq!(
-        requests("column_two"),
-        reads_two,
-        "the other column wasn't touched"
-    );
-    assert_eq!(urls(&column(&h, 0)), vec![REEL, tweet(2).as_str()]);
-    assert_eq!(urls(&column(&h, 1)), vec![TIKTOK, TWEET]);
-
-    // Removing, and disconnecting, only affect one column.
-    let first = column(&h, 1)["items"][0]["id"].as_i64().unwrap();
-    let after = call(&h.win, "queue_remove", json!({ "slot": 1, "id": first })).unwrap();
-    assert_eq!(after["slot"], 1);
-    assert_eq!(urls(&after), vec![TWEET]);
-    assert_eq!(urls(&column(&h, 0)).len(), 2);
-    call(&h.win, "queue_disconnect", json!({ "slot": 0 })).unwrap();
-    assert!(column(&h, 0)["channel"].is_null());
-    assert_eq!(column(&h, 1)["channel"], "column_two");
-    assert_eq!(urls(&column(&h, 1)), vec![TWEET]);
+    // Removing a link, and deleting a queue, only affect that one.
+    let first = queue(&h, ids[1])["items"][0]["id"].as_i64().unwrap();
+    assert_eq!(urls(&remove_item(&h, ids[1], first)), vec![TWEET]);
+    assert_eq!(urls(&queue(&h, ids[0])).len(), 2);
+    call(&h.win, "queue_delete", json!({ "id": ids[0] })).unwrap();
+    let left: Vec<_> = all(&h).iter().map(|q| q["id"].as_u64().unwrap()).collect();
+    assert_eq!(left, vec![ids[1], ids[2]]);
+    assert_eq!(urls(&queue(&h, ids[1])), vec![TWEET]);
 }
 
 #[test]
-fn both_columns_can_be_refreshed_at_the_same_time() {
+fn several_queues_can_be_refreshed_at_the_same_time() {
     let Some(h) = harness() else { return };
     server();
     open_channel("parallel_one", vec![(1, link(REEL))]);
     open_channel("parallel_two", vec![(1, link(TIKTOK))]);
-    set_slot(&h, 0, "parallel_one").unwrap();
-    set_slot(&h, 1, "parallel_two").unwrap();
+    let a = add_id(&h, "parallel_one");
+    let b = add_id(&h, "parallel_two");
     post_link("parallel_one", 2, &tweet(2));
     post_link("parallel_two", 2, &tweet(3));
     // Not the same "job": one refresh must not turn the other into a no-op.
     let (win_a, win_b) = (h.win.clone(), h.win.clone());
-    let a = std::thread::spawn(move || call(&win_a, "queue_refresh", json!({ "slot": 0 })).unwrap());
-    let b = std::thread::spawn(move || call(&win_b, "queue_refresh", json!({ "slot": 1 })).unwrap());
+    let a = std::thread::spawn(move || call(&win_a, "queue_refresh", json!({ "id": a })).unwrap());
+    let b = std::thread::spawn(move || call(&win_b, "queue_refresh", json!({ "id": b })).unwrap());
     let (a, b) = (a.join().unwrap(), b.join().unwrap());
     assert_eq!(a["added"], 1);
     assert_eq!(b["added"], 1);
 }
 
 #[test]
-fn one_channel_cannot_fill_both_columns() {
+fn a_channel_can_only_be_one_queue() {
     let Some(h) = harness() else { return };
     server();
-    open_channel("only_one_channel", vec![(1, link(REEL))]);
-    open_channel("a_second_channel", vec![(1, link(TIKTOK))]);
-    set_slot(&h, 0, "only_one_channel").unwrap();
+    open_channel("Only_One_Chan", vec![(1, link(REEL))]);
+    add(&h, "Only_One_Chan").unwrap();
+    let reads = requests("Only_One_Chan");
     // The same name, however it is written (and Telegram ignores capitals).
-    for input in [
-        "only_one_channel",
-        "@Only_One_Channel",
-        "https://t.me/s/only_one_channel",
-    ] {
-        let err = set_slot(&h, 1, input).unwrap_err();
+    for input in ["Only_One_Chan", "@only_one_chan", "https://t.me/s/ONLY_ONE_CHAN"] {
+        let err = add(&h, input).unwrap_err();
         assert!(
-            err.as_str().unwrap().contains("already in the left column"),
+            err.as_str()
+                .unwrap()
+                .contains("t.me/Only_One_Chan is already one of your queues"),
             "{input}: {err}"
         );
     }
-    assert!(column(&h, 1)["channel"].is_null());
-    // Another channel is fine, and the first column can't take the second's channel either.
-    set_slot(&h, 1, "a_second_channel").unwrap();
-    let err = set_slot(&h, 0, "a_second_channel").unwrap_err();
-    assert!(
-        err.as_str().unwrap().contains("already in the right column"),
-        "{err}"
-    );
     assert_eq!(
-        column(&h, 0)["channel"],
-        "only_one_channel",
-        "the failed change left it alone"
+        requests("Only_One_Chan"),
+        reads,
+        "refused before reading Telegram"
     );
+    assert_eq!(all(&h).len(), 1);
 }
 
 #[test]
-fn setting_a_channel_again_keeps_the_queue_even_if_the_capitals_changed() {
+fn there_is_a_limit_on_how_many_queues_there_are() {
     let Some(h) = harness() else { return };
     server();
-    open_channel("Mixed_Case_Chan", vec![(1, link(REEL))]);
-    let first = set(&h, "Mixed_Case_Chan").unwrap();
-    assert_eq!(urls(&first["view"]), vec![REEL]);
-    let id = first["view"]["items"][0]["id"].as_i64().unwrap();
-    call(&h.win, "queue_remove", json!({ "slot": 0, "id": id })).unwrap();
-    // Typing the name differently is not a new channel: nothing already read comes back.
-    let again = set(&h, "@mixed_case_chan").unwrap();
-    assert_eq!(again["added"], 0);
-    assert_eq!(again["view"]["channel"], "Mixed_Case_Chan");
-    assert_eq!(urls(&again["view"]).len(), 0);
-}
-
-#[test]
-fn a_column_that_does_not_exist_is_an_error_not_a_crash() {
-    let Some(h) = harness() else { return };
-    for (cmd, body) in [
-        ("queue_refresh", json!({ "slot": 2 })),
-        ("queue_set_channel", json!({ "slot": 7, "input": "my_links" })),
-        ("queue_remove", json!({ "slot": 2, "id": 1 })),
-        ("queue_disconnect", json!({ "slot": 99 })),
-    ] {
-        let err = call(&h.win, cmd, body).unwrap_err();
-        assert!(err.as_str().unwrap().contains("only 2 columns"), "{cmd}: {err}");
+    for i in 0..20 {
+        let name = format!("limit_chan_{i}");
+        open_channel(&name, vec![(1, link(REEL))]);
+        add(&h, &name).unwrap();
     }
+    open_channel("limit_chan_extra", vec![(1, link(REEL))]);
+    let err = add(&h, "limit_chan_extra").unwrap_err();
+    assert!(err.as_str().unwrap().contains("at most 20 queues"), "{err}");
+    assert_eq!(requests("limit_chan_extra"), 0);
+    assert_eq!(all(&h).len(), 20);
 }
 
 #[test]
-fn the_queues_are_kept_on_disk_one_per_column() {
-    let Some(h) = harness() else { return };
-    server();
-    open_channel("disk_one", vec![(1, link(REEL))]);
-    open_channel("disk_two", vec![(1, link(TIKTOK))]);
-    set_slot(&h, 0, "disk_one").unwrap();
-    set_slot(&h, 1, "disk_two").unwrap();
-    let saved: Value =
-        serde_json::from_str(&std::fs::read_to_string(h.dir.path().join("data/queue.json")).unwrap())
-            .unwrap();
-    assert_eq!(saved["slots"].as_array().unwrap().len(), 2);
-    assert_eq!(saved["slots"][0]["channel"], "disk_one");
-    assert_eq!(saved["slots"][1]["items"][0]["url"], TIKTOK);
+fn the_two_columns_of_the_last_version_are_kept_as_two_queues() {
+    let Some(h) = harness_with_data(|data| {
+        std::fs::write(
+            data.join("queue.json"),
+            r#"{"slots":[{"channel":"old_left","seenUpTo":5,"nextId":1,"items":[{"id":1,"url":"https://x.com/jack/status/20","platform":"twitter","addedAt":1}]},{"channel":"old_right"}]}"#,
+        )
+        .unwrap();
+    }) else {
+        return;
+    };
+    let queues = all(&h);
+    assert_eq!(queues.len(), 2);
+    assert_eq!(queues[0]["channel"], "old_left");
+    assert_eq!(urls(&queues[0]), vec![TWEET]);
+    assert_eq!(queues[1]["channel"], "old_right");
 }

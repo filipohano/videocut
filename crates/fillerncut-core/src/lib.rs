@@ -24,7 +24,7 @@ pub use export::{
 pub use history::{HistoryEntry, HistoryKind, HistoryStore, NewEntry};
 pub use links::{parse_link, LinkError, ParsedLink, Platform};
 pub use media::{parse_encoders, parse_ffprobe, parse_showinfo_size, EncoderSupport, MediaInfo};
-pub use queue::{QueueItem, QueueState, QueueStore};
+pub use queue::{Queue, QueueError, QueueItem, QueueState, QueueStore};
 pub use settings::{CookieBrowser, Settings, UpdateMode};
 pub use textpreset::{TextPreset, TextPresetStore, TextPresetStyle};
 pub use watermark::{LibraryStore, TextStyle, WatermarkEntry, WatermarkPatch};

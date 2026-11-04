@@ -7,9 +7,9 @@
  * Query flags:  ?update=1  pretend a newer release exists
  *               ?mode=notify|manual  start with that update mode
  *               ?styles=some  start with a few saved text styles
- *               ?queue=items|one|empty  Telegram queue: two columns with links, only the
- *                 left one, or two without links (default: no channel yet; "my_links"
- *                 works, "private_one" fails)
+ *               ?queue=items|one|empty  Telegram queues: three channels with links, one
+ *                 channel, or channels without links (default: none yet; any name works,
+ *                 "private_one" fails)
  */
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
@@ -73,16 +73,23 @@ const sampleItems = [
   { id: 3, url: "https://x.com/jack/status/20", platform: "twitter", addedAt: nowSeconds() - 30 * 3600 },
   { id: 4, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", platform: "youtube", addedAt: nowSeconds() - 2 * 86400 },
 ];
-type MockColumn = { slot: number; channel: string | null; items: typeof sampleItems; lastRefreshed: number | null };
-const emptyColumn = (slot: number): MockColumn => ({ slot, channel: null, items: [], lastRefreshed: null });
-// ?queue=items: both columns have a channel; ?queue=one: only the left one; ?queue=empty: channels without links.
-const queue: MockColumn[] = [emptyColumn(0), emptyColumn(1)];
+type MockQueue = { id: number; channel: string; items: typeof sampleItems; lastRefreshed: number | null };
+// ?queue=items: three channels with links; ?queue=one: one channel; ?queue=empty: channels without links.
+let queues: MockQueue[] = [];
+let nextQueueId = 1;
+const mockQueue = (channel: string, items: typeof sampleItems, ago: number): MockQueue => ({ id: nextQueueId++, channel, items, lastRefreshed: nowSeconds() - ago });
 if (queueMode === "items" || queueMode === "one" || queueMode === "empty") {
-  queue[0] = { slot: 0, channel: "my_links", items: queueMode === "empty" ? [] : sampleItems.slice(0, 3), lastRefreshed: nowSeconds() - 60 };
+  queues.push(mockQueue("my_links", queueMode === "empty" ? [] : sampleItems.slice(0, 3), 60));
 }
 if (queueMode === "items" || queueMode === "empty") {
-  queue[1] = { slot: 1, channel: "work_clips", items: queueMode === "empty" ? [] : [sampleItems[3], { ...sampleItems[0], id: 9, url: "https://www.instagram.com/reel/Zx9Qw8ErTyU" }], lastRefreshed: nowSeconds() - 600 };
+  queues.push(mockQueue("work_clips", queueMode === "empty" ? [] : [sampleItems[3], { ...sampleItems[0], id: 9, url: "https://www.instagram.com/reel/Zx9Qw8ErTyU" }], 600));
+  queues.push(mockQueue("funny_stuff", queueMode === "empty" ? [] : [sampleItems[1]], 900));
 }
+const findQueue = (id: number) => {
+  const q = queues.find((x) => x.id === id);
+  if (!q) throw "That queue isn't there any more.";
+  return q;
+};
 
 const cancelled = new Set<string>();
 
@@ -194,26 +201,32 @@ mockIPC(
         await simulate("download", "Downloading…", 2400);
         return { path: "/dev/sample.webm", platform: "tiktok", title: null, note: null };
       case "queue_get":
-        return queue;
-      case "queue_refresh":
-        if (queue[a.slot].channel) queue[a.slot] = { ...queue[a.slot], lastRefreshed: nowSeconds() };
-        return { view: queue[a.slot], added: 0 };
-      case "queue_set_channel": {
+        return queues;
+      case "queue_refresh": {
+        const q = findQueue(a.id);
+        q.lastRefreshed = nowSeconds();
+        return { view: q, added: 0 };
+      }
+      case "queue_add": {
         await sleep(500);
         const name = String(a.input).trim().replace(/^@|^https?:\/\/t\.me\/(s\/)?/, "");
         if (!/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(name)) throw "That isn't a Telegram channel name. It should look like @my_links or https://t.me/my_links (5–32 letters, digits or underscores).";
+        const existing = queues.find((q) => q.channel.toLowerCase() === name.toLowerCase());
+        if (existing) throw `t.me/${existing.channel} is already one of your queues.`;
+        if (queues.length >= 20) throw "You can have at most 20 queues. Remove one you don't use first.";
         if (name === "private_one") throw `Couldn't read any posts from t.me/${name}. The channel has to be public (it needs a username: Channel settings → Channel type → Public) and have at least one post.`;
-        const other = queue[1 - a.slot].channel;
-        if (other && other.toLowerCase() === name.toLowerCase()) throw `t.me/${name} is already in the ${a.slot === 0 ? "right" : "left"} column. Each column needs its own channel.`;
-        queue[a.slot] = { slot: a.slot, channel: name, items: sampleItems.slice(0, 2), lastRefreshed: nowSeconds() };
-        return { view: queue[a.slot], added: 2 };
+        const q = mockQueue(name, sampleItems.slice(0, 2).map((i) => ({ ...i })), 0);
+        queues = [...queues, q];
+        return { view: q, added: 2 };
       }
-      case "queue_remove":
-        queue[a.slot] = { ...queue[a.slot], items: queue[a.slot].items.filter((i) => i.id !== a.id) };
-        return queue[a.slot];
-      case "queue_disconnect":
-        queue[a.slot] = emptyColumn(a.slot);
-        return queue[a.slot];
+      case "queue_remove_item": {
+        const q = findQueue(a.queue);
+        q.items = q.items.filter((i) => i.id !== a.item);
+        return q;
+      }
+      case "queue_delete":
+        queues = queues.filter((q) => q.id !== a.id);
+        return null;
       case "history_list":
         return history;
       case "history_remove":

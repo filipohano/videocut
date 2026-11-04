@@ -103,10 +103,10 @@ export interface QueueItem {
 }
 
 export interface QueueView {
-  /** Which column this is (0 = left, 1 = right). */
-  slot: number;
-  /** The Telegram channel this column reads, once one is set. */
-  channel: string | null;
+  /** Never reused, so it always means the same queue. */
+  id: number;
+  /** The Telegram channel this queue reads. */
+  channel: string;
   items: QueueItem[];
   /** Unix seconds */
   lastRefreshed: number | null;
@@ -209,10 +209,10 @@ export const api = {
   discardDownload: (path: string) => invoke<boolean>("discard_download", { path }),
 
   queueGet: () => invoke<QueueView[]>("queue_get"),
-  queueRefresh: (slot: number) => invoke<QueueRefresh>("queue_refresh", { slot }),
-  queueSetChannel: (slot: number, input: string) => invoke<QueueRefresh>("queue_set_channel", { slot, input }),
-  queueRemove: (slot: number, id: number) => invoke<QueueView>("queue_remove", { slot, id }),
-  queueDisconnect: (slot: number) => invoke<QueueView>("queue_disconnect", { slot }),
+  queueAdd: (input: string) => invoke<QueueRefresh>("queue_add", { input }),
+  queueRefresh: (id: number) => invoke<QueueRefresh>("queue_refresh", { id }),
+  queueRemoveItem: (queue: number, item: number) => invoke<QueueView>("queue_remove_item", { queue, item }),
+  queueDelete: (id: number) => invoke<void>("queue_delete", { id }),
 
   libraryList: () => invoke<WatermarkEntry[]>("library_list"),
   libraryAdd: (path: string) => invoke<WatermarkEntry>("library_add", { path }),

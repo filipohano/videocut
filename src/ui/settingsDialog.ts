@@ -3,7 +3,7 @@ import { api, errorMessage, type CookieBrowser, type Settings, type UpdateMode }
 import { checkForUpdates, installUpdate, lastChecked } from "../updates";
 import { store } from "../store";
 import { $, h } from "./dom";
-import { COLUMN_NAMES, QUEUE_SLOTS } from "./queue";
+import { addQueue, deleteQueue } from "./queue";
 import { toast } from "./toast";
 
 const MODES: { value: UpdateMode; title: string; help: string }[] = [
@@ -125,68 +125,62 @@ export function initSettingsDialog(): void {
     cookies.addEventListener("change", () => void save({ cookiesBrowser: (cookies.value || null) as CookieBrowser | null }));
 
     // ───────── Telegram queue ─────────
-    const queueRow = (slot: number): HTMLElement => {
-      const channel = () => store.queue[slot]?.channel ?? null;
-      const input = h("input", {
-        type: "text",
-        spellcheck: false,
-        autocapitalize: "off",
-        autocorrect: "off",
-        placeholder: "@my_links",
-        "aria-label": `${COLUMN_NAMES[slot]}: Telegram channel`,
-        value: channel() ? `@${channel()}` : "",
-      }) as HTMLInputElement;
-      const save = h("button", { class: "btn primary small", type: "submit" }, "Save");
-      const remove = h("button", { class: "btn small danger", type: "button" }, "Disconnect");
-      const status = h("p", { class: "small muted queue-status", role: "status" });
-      const showIdle = () => {
-        remove.classList.toggle("hidden", !channel());
-        status.className = "small muted queue-status";
-        status.textContent = channel() ? `Reading t.me/${channel()}. Remove it with Disconnect.` : "No channel: this column stays empty.";
-      };
-      showIdle();
-
-      const form = h("form", { class: "queue-form", autocomplete: "off" }, input, save, remove);
-      form.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const typed = input.value.trim();
-        if (typed === "") {
-          if (channel()) remove.click();
-          return;
-        }
-        save.disabled = true;
-        status.className = "small muted queue-status";
-        status.textContent = "Checking the channel…";
-        try {
-          const result = await api.queueSetChannel(slot, typed);
-          store.queue[slot] = result.view;
-          store.emit("queue");
-          input.value = `@${result.view.channel}`;
-          showIdle();
-          status.textContent =
-            result.added > 0
-              ? `Reading t.me/${result.view.channel}: found ${result.added === 1 ? "1 link" : `${result.added} links`}.`
-              : `Reading t.me/${result.view.channel}. Links you post there show up on the start screen.`;
-        } catch (err) {
-          status.className = "small status-err queue-status";
-          status.textContent = errorMessage(err);
-        } finally {
-          save.disabled = false;
-        }
-      });
-      remove.addEventListener("click", async () => {
-        try {
-          store.queue[slot] = await api.queueDisconnect(slot);
-          store.emit("queue");
-          input.value = "";
-          showIdle();
-        } catch (err) {
-          status.className = "small status-err queue-status";
-          status.textContent = errorMessage(err);
-        }
-      });
-      return h("div", { class: "queue-setting" }, h("label", { class: "stack" }, COLUMN_NAMES[slot], form), status);
+    // Every channel being read, with a way to remove it, and a form to add another.
+    const queueList = h("div", { class: "queue-settings-list" });
+    const drawQueues = () => {
+      queueList.replaceChildren(
+        ...(store.queue.length === 0
+          ? [h("p", { class: "small muted queue-status" }, "No channels yet.")]
+          : store.queue.map((q) =>
+              h(
+                "div",
+                { class: "queue-setting-row" },
+                h("span", { class: "grow" }, `@${q.channel}`, h("span", { class: "muted small" }, `  ·  ${q.items.length} waiting`)),
+                h("button", { class: "btn small danger", type: "button", onclick: async () => (await deleteQueue(q)) && drawQueues() }, "Remove"),
+              ),
+            )),
+      );
     };
+    drawQueues();
+    const queueInput = h("input", {
+      type: "text",
+      spellcheck: false,
+      autocapitalize: "off",
+      autocorrect: "off",
+      placeholder: "@my_links",
+      "aria-label": "Telegram channel to add",
+    }) as HTMLInputElement;
+    const queueAdd = h("button", { class: "btn primary small", type: "submit" }, "Add");
+    const queueStatus = h("p", { class: "small muted queue-status", role: "status" });
+    const queueForm = h("form", { class: "queue-form", autocomplete: "off" }, queueInput, queueAdd);
+    queueForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (queueAdd.disabled) return;
+      queueAdd.disabled = true;
+      queueStatus.className = "small muted queue-status";
+      queueStatus.textContent = "Checking the channel…";
+      try {
+        const result = await addQueue(queueInput.value);
+        queueInput.value = "";
+        queueStatus.textContent =
+          result.added > 0
+            ? `Added t.me/${result.view.channel}: found ${result.added === 1 ? "1 link" : `${result.added} links`}.`
+            : `Added t.me/${result.view.channel}. Links you post there show up on the start screen.`;
+        drawQueues();
+      } catch (err) {
+        queueStatus.className = "small status-err queue-status";
+        queueStatus.textContent = errorMessage(err);
+      } finally {
+        queueAdd.disabled = false;
+      }
+    });
+    const queueSettings = h(
+      "div",
+      { class: "queue-setting" },
+      queueList,
+      h("label", { class: "stack" }, "Add a channel", queueForm),
+      queueStatus,
+    );
 
     // ───────── folders ─────────
     const folderRow = (label: string, hint: string, current: string | null, resolve: () => Promise<string>, key: "exportDir") => {
@@ -292,11 +286,11 @@ export function initSettingsDialog(): void {
           "section",
           { class: "set-section" },
           h("h3", {}, "Telegram queue"),
-          ...Array.from({ length: QUEUE_SLOTS }, (_, slot) => queueRow(slot)),
+          queueSettings,
           h(
             "p",
             { class: "muted small", style: { margin: "0" } },
-            "Each column on the start screen reads one Telegram channel of your own. Create a channel, make it Public (Channel settings → Channel type) and type its username here, then share TikTok, Instagram, X and YouTube links to it from your phone. They are read when the app opens and every 30 minutes. Anyone who knows a public channel's name can read it, so pick a name nobody would guess and post only links there.",
+            "Each queue reads one Telegram channel of your own; add as many as you like (also with “+ Add channel” on the start screen). Create a channel, make it Public (Channel settings → Channel type) and type its username here, then share TikTok, Instagram, X and YouTube links to it from your phone. They are read when the app opens and every 30 minutes. Anyone who knows a public channel's name can read it, so pick a name nobody would guess and post only links there.",
           ),
         ),
         h("section", { class: "set-section" }, h("h3", {}, "Folders"), finishedRow, askRow),

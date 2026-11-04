@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { REFRESH_EVERY_MS, RefreshTimer, shortLink, timeAgo } from "./queue";
+import { DEFAULT_LAYOUT, REFRESH_EVERY_MS, RefreshTimer, parseLayout, placeNew, resolveShown, shortLink, showInColumn, timeAgo, type QueueLayout } from "./queue";
 
 const MIN = 60_000;
 
@@ -147,5 +147,40 @@ describe("RefreshTimer", () => {
     await running;
     await vi.advanceTimersByTimeAsync(2 * REFRESH_EVERY_MS);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("queue layout", () => {
+  const layout = (columns: 1 | 2, a: number | null, b: number | null): QueueLayout => ({ columns, shown: [a, b] });
+
+  it("reads back only what makes sense", () => {
+    expect(parseLayout({ columns: 1, shown: [3, 4] })).toEqual(layout(1, 3, 4));
+    expect(parseLayout({ columns: 7, shown: ["x", -1] })).toEqual(layout(2, null, null));
+    expect(parseLayout(null)).toEqual(DEFAULT_LAYOUT);
+    expect(parseLayout("junk")).toEqual(DEFAULT_LAYOUT);
+  });
+
+  it("fills empty columns with the first queues nobody shows", () => {
+    expect(resolveShown(layout(2, null, null), [5, 6, 7]).shown).toEqual([5, 6]);
+    expect(resolveShown(layout(2, 7, null), [5, 6, 7]).shown).toEqual([7, 5]);
+    expect(resolveShown(layout(2, null, null), [5]).shown).toEqual([5, null]);
+    expect(resolveShown(layout(2, null, null), []).shown).toEqual([null, null]);
+  });
+
+  it("replaces a queue that was removed and never shows one queue twice", () => {
+    expect(resolveShown(layout(2, 9, 6), [5, 6]).shown).toEqual([5, 6]);
+    expect(resolveShown(layout(2, 6, 6), [5, 6]).shown).toEqual([6, 5]);
+    expect(resolveShown(layout(1, 6, 9), [5, 6]).columns).toBe(1);
+  });
+
+  it("swaps when a column picks the queue the other one shows", () => {
+    expect(showInColumn(layout(2, 5, 6), 0, 6).shown).toEqual([6, 5]);
+    expect(showInColumn(layout(2, 5, 6), 1, 7).shown).toEqual([5, 7]);
+  });
+
+  it("shows a new queue straight away", () => {
+    expect(placeNew(layout(1, 5, 6), 8).shown).toEqual([8, 6]);
+    expect(placeNew(layout(2, 5, 6), 8).shown).toEqual([5, 8]);
+    expect(placeNew(layout(2, null, null), 8).shown).toEqual([8, null]);
   });
 });
