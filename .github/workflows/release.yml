@@ -13,7 +13,8 @@ permissions:
 jobs:
   macos:
     name: Build and publish (macOS, Apple silicon)
-    runs-on: macos-14
+    # macos-14 was retired by GitHub on 2 November 2026.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
