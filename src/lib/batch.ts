@@ -64,6 +64,8 @@ export function buildBatchSpec(
           content: w.content,
         }))
       : [],
+    // Removed text belongs to one picture: other files have their own.
+    fills: [],
     sourceBitrate: info.bitrate,
     fps: info.fps,
     imageFormat: info.isImage ? template.imageFormat : null,

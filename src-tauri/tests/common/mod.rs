@@ -138,3 +138,44 @@ pub fn probe_dims(path: &str) -> (u64, u64, f64) {
         v["format"]["duration"].as_str().unwrap().parse().unwrap(),
     )
 }
+
+/// The colour of one pixel of an image or video frame, as (r, g, b).
+pub fn pixel(path: &str, x: u32, y: u32) -> (u8, u8, u8) {
+    pixel_at(path, None, x, y)
+}
+
+/// The colour of one pixel of the frame at `time` seconds.
+pub fn pixel_at(path: &str, time: Option<f64>, x: u32, y: u32) -> (u8, u8, u8) {
+    let mut args: Vec<String> = vec!["-v".into(), "error".into()];
+    if let Some(t) = time {
+        args.extend(["-ss".into(), format!("{t}")]);
+    }
+    let crop = format!("format=rgb24,crop=1:1:{x}:{y}");
+    args.extend(
+        [
+            "-i",
+            path,
+            "-vf",
+            &crop,
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+        ]
+        .iter()
+        .map(|s| s.to_string()),
+    );
+    let out = Command::new("ffmpeg").args(&args).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.stdout.len(), 3, "one pixel");
+    (out.stdout[0], out.stdout[1], out.stdout[2])
+}
+
+pub fn near(a: (u8, u8, u8), b: (u8, u8, u8), tolerance: i32) -> bool {
+    [(a.0, b.0), (a.1, b.1), (a.2, b.2)]
+        .iter()
+        .all(|(x, y)| (*x as i32 - *y as i32).abs() <= tolerance)
+}

@@ -9,3 +9,34 @@ opt-level = "s"
 # A Rust panic in one task/command shouldn't kill the whole app, and crash reports
 # should show function names.
 strip = "debuginfo"
+
+# The AI model of the "Remove text" add-on runs in tract: its maths is optimised for speed (the
+# rest of the app for size), and also in debug builds, where it would otherwise take minutes.
+[profile.release.package.tract-core]
+opt-level = 3
+[profile.release.package.tract-data]
+opt-level = 3
+[profile.release.package.tract-hir]
+opt-level = 3
+[profile.release.package.tract-linalg]
+opt-level = 3
+[profile.release.package.tract-nnef]
+opt-level = 3
+[profile.release.package.tract-onnx]
+opt-level = 3
+[profile.release.package.tract-onnx-opl]
+opt-level = 3
+[profile.dev.package.tract-core]
+opt-level = 3
+[profile.dev.package.tract-data]
+opt-level = 3
+[profile.dev.package.tract-hir]
+opt-level = 3
+[profile.dev.package.tract-linalg]
+opt-level = 3
+[profile.dev.package.tract-nnef]
+opt-level = 3
+[profile.dev.package.tract-onnx]
+opt-level = 3
+[profile.dev.package.tract-onnx-opl]
+opt-level = 3

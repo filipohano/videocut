@@ -13,6 +13,8 @@ function video(over: Partial<VideoState> = {}): VideoState {
     trimEnd: 10,
     watermarks: [],
     texts: [],
+    fills: [],
+    stills: null,
     quality: 60,
     imageFormat: "jpg",
     ...over,

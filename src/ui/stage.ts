@@ -11,6 +11,7 @@ import { imagePosition, isEmptyText, sizeAfterResize, type TextLayout } from "..
 import { drawTextBox } from "../lib/textRender";
 import { store, type ActiveWatermark } from "../store";
 import { layoutOf, moveText, resizeKeepingCorner, selectText, textById } from "../textOps";
+import { fillBox, fillUi, fillVisibleAt, setDrawing } from "../fillOps";
 import { $, h, raf } from "./dom";
 
 const HANDLES: Handle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
@@ -37,6 +38,8 @@ export function initStage(): Stage {
   const handleLayer = $("#handle-layer");
   const wmLayer = $("#wm-layer");
   const textLayer = $("#text-layer");
+  const fillLayer = $("#fill-layer");
+  const drawLayer = $("#draw-layer");
   const playBtn = $("#btn-play");
   const playIcon = $("#play-icon");
   const seek = $<HTMLInputElement>("#seek");
@@ -299,6 +302,91 @@ export function initStage(): Stage {
     textGrip.addEventListener("pointercancel", onUp);
   }
 
+  // ───────── removed text ("Remove text") ─────────
+  const fillEls = new Map<string, HTMLImageElement>();
+  /** The box being drawn or filled, in source pixels. */
+  const drawRect = h("div", { class: "draw-rect hidden" }, h("span", { class: "draw-label" }));
+  drawLayer.append(drawRect);
+  let dragBox: Rect | null = null;
+
+  function renderFills(): void {
+    const list = store.video?.fills ?? [];
+    const ids = new Set(list.map((f) => f.id));
+    for (const [id, el] of fillEls)
+      if (!ids.has(id)) {
+        el.remove();
+        fillEls.delete(id);
+      }
+    for (const f of list) {
+      if (fillEls.has(f.id)) continue;
+      const img = h("img", { class: "fill-patch", src: f.url, alt: "", draggable: false });
+      fillLayer.append(img);
+      fillEls.set(f.id, img);
+    }
+    drawLayer.classList.toggle("hidden", !fillUi.drawing && !fillUi.working);
+    drawLayer.classList.toggle("active", fillUi.drawing && !fillUi.working);
+    layoutFills();
+  }
+
+  function layoutFills(): void {
+    const v = store.video;
+    if (!v) return;
+    const t = store.playhead;
+    for (const f of v.fills) {
+      const el = fillEls.get(f.id);
+      if (!el) continue;
+      el.style.cssText = `left:${f.x * k}px;top:${f.y * k}px;width:${f.w * k}px;height:${f.h * k}px`;
+      el.classList.toggle("hidden", fillUi.showOriginal || !fillVisibleAt(f, t));
+    }
+    const box = fillUi.working ?? dragBox;
+    drawRect.classList.toggle("hidden", !box);
+    drawRect.classList.toggle("working", !!fillUi.working);
+    drawRect.querySelector(".draw-label")!.textContent = fillUi.working ? "Removing text…" : "";
+    if (box) drawRect.style.cssText = `left:${box.x * k}px;top:${box.y * k}px;width:${box.w * k}px;height:${box.h * k}px`;
+  }
+
+  drawLayer.addEventListener("pointerdown", (e) => {
+    const v = store.video;
+    if (!v || !fillUi.drawing || fillUi.working || e.button !== 0) return;
+    e.preventDefault();
+    drawLayer.setPointerCapture(e.pointerId);
+    const frame = store.frame!;
+    const origin = stage.getBoundingClientRect();
+    const at = (ev: PointerEvent) => ({
+      x: clamp((ev.clientX - origin.left) / k, 0, frame.w),
+      y: clamp((ev.clientY - origin.top) / k, 0, frame.h),
+    });
+    const start = at(e);
+    const onMove = (ev: PointerEvent) => {
+      const p = at(ev);
+      dragBox = {
+        x: Math.round(Math.min(start.x, p.x)),
+        y: Math.round(Math.min(start.y, p.y)),
+        w: Math.round(Math.abs(p.x - start.x)),
+        h: Math.round(Math.abs(p.y - start.y)),
+      };
+      layoutFills();
+    };
+    const onUp = () => {
+      drawLayer.removeEventListener("pointermove", onMove);
+      drawLayer.removeEventListener("pointerup", onUp);
+      drawLayer.removeEventListener("pointercancel", onUp);
+      const box = dragBox;
+      dragBox = null;
+      layoutFills();
+      // A click, or a box too small to hold any text, does nothing.
+      if (box && box.w >= 4 && box.h >= 4) void fillBox(box);
+    };
+    drawLayer.addEventListener("pointermove", onMove);
+    drawLayer.addEventListener("pointerup", onUp);
+    drawLayer.addEventListener("pointercancel", onUp);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && fillUi.drawing && !document.querySelector("dialog[open]")) setDrawing(false);
+  });
+  store.on("fills", renderFills);
+  store.on("playhead", raf(layoutFills));
+
   // Clicking empty video deselects the watermark or text.
   stage.addEventListener("pointerdown", (e) => {
     if (e.target === video) select(null);
@@ -401,6 +489,7 @@ export function initStage(): Stage {
     v.watermarks.forEach((wm) => layoutWatermark(wm, c));
     layoutGrip(c);
     layoutTexts(c);
+    layoutFills();
   }
 
   store.on(["crop", "watermarks", "selection"], raf(layout));
@@ -414,6 +503,7 @@ export function initStage(): Stage {
   function updateClock(): void {
     const t = video.currentTime;
     store.playhead = t;
+    store.emit("playhead");
     clock.textContent = `${formatClock(t)} / ${formatClock(duration)}`;
     if (duration > 0) seek.value = String(Math.round((t / duration) * 1000));
   }
@@ -527,11 +617,13 @@ export function initStage(): Stage {
       wmEls.clear();
       for (const { el } of textEls.values()) el.remove();
       textEls.clear();
+      renderFills();
       return;
     }
     duration = v.info.duration;
     renderWatermarks();
     renderTexts();
+    renderFills();
     updateClock();
     updateTrimRange();
     fit();

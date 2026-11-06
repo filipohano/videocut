@@ -21,6 +21,8 @@ import { initStage } from "./ui/stage";
 import { initQueue } from "./ui/queue";
 import { initStart } from "./ui/start";
 import { initTextPanel } from "./ui/textPanel";
+import { initFillPanel } from "./ui/fillPanel";
+import "./fillOps";
 import { shortcut } from "./lib/platform";
 import { toast } from "./ui/toast";
 import { initWatermarkPanel } from "./ui/watermarkPanel";
@@ -47,6 +49,7 @@ async function boot(): Promise<void> {
 
   await refreshLibrary().catch((e) => console.warn("library", e));
   await refreshTextStyles().catch((e) => console.warn("text styles", e));
+  store.modules = await api.modulesList().catch(() => []);
   // The text font loads in the background; text is drawn again once it is there.
   void ensureTextFont();
   await startProgressRouter();
@@ -58,6 +61,7 @@ async function boot(): Promise<void> {
   initCropPanel();
   initTrimPanel(stage);
   initWatermarkPanel();
+  initFillPanel(stage);
   initTextPanel();
   initOutputPanel();
   initExportBar();

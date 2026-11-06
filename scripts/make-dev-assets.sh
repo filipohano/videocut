@@ -20,4 +20,14 @@ cp public/dev/sample.webm public/dev/sample3.webm
 # sample photos
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc2=size=1200x800:rate=1:duration=1" -frames:v 1 public/dev/photo.jpg
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc=size=900x1200:rate=1:duration=1" -frames:v 1 public/dev/photo.png
+# A photo post as the app builds it: three photos with captions, two seconds each (Remove text)
+ffmpeg -hide_banner -loglevel error -y \
+  -f lavfi -i "testsrc2=size=540x960:rate=30:duration=2" \
+  -f lavfi -i "smptebars=size=540x960:rate=30:duration=2" \
+  -f lavfi -i "color=c=0x406080:size=540x960:rate=30:duration=2" \
+  -f lavfi -i "sine=frequency=330:duration=6" \
+  -filter_complex "[0:v]trim=end_frame=1,loop=59:1,setpts=N/30/TB,drawbox=x=90:y=640:w=360:h=60:color=white:t=fill[a];[1:v]trim=end_frame=1,loop=59:1,setpts=N/30/TB,drawbox=x=60:y=300:w=420:h=60:color=white:t=fill[b];[2:v]drawbox=x=120:y=700:w=300:h=50:color=white:t=fill[c];[a][b][c]concat=n=3:v=1:a=0[v]" \
+  -map "[v]" -map 3:a -c:v libx264 -pix_fmt yuv420p -c:a aac public/dev/slides.mp4
+# What the mock returns as a "filled" area
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i "color=c=0xd96b8a@0.85:s=64x32,format=rgba" -frames:v 1 public/dev/fill-patch.png
 echo "Dev assets written to public/dev/"

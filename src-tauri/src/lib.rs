@@ -3,8 +3,10 @@ mod dirs;
 mod download;
 mod editor;
 mod history;
+mod inpaint;
 mod jobs;
 mod library;
+mod modules;
 mod queue;
 mod settings;
 mod state;
@@ -46,6 +48,11 @@ pub fn register_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         queue::queue_remove_item,
         queue::queue_delete,
         text::save_text_image,
+        modules::modules_list,
+        modules::module_install,
+        modules::module_remove,
+        inpaint::analyze_stills,
+        inpaint::inpaint_fill,
         text::text_presets_list,
         text::text_presets_save,
         text::text_presets_remove,
@@ -165,6 +172,7 @@ pub fn run() {
             editor::prune_preview_cache(&cache_dir);
             dirs::clear_downloads(&cache_dir);
             text::clear_text_images(&cache_dir);
+            inpaint::clear_fills(&cache_dir);
 
             // Fetch the downloader on first launch, and (setting-controlled) refresh
             // it in the background every launch: Instagram / X / TikTok break it often.

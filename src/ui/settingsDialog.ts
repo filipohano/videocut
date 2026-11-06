@@ -1,10 +1,81 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, errorMessage, type CookieBrowser, type Settings, type UpdateMode } from "../api";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { CANCELLED, api, errorMessage, type CookieBrowser, type ModuleView, type Settings, type UpdateMode } from "../api";
+import { formatBytes } from "../lib/format";
+import { subscribe } from "../progress";
 import { checkForUpdates, installUpdate, lastChecked } from "../updates";
 import { store } from "../store";
 import { $, h } from "./dom";
 import { addQueue, deleteQueue } from "./queue";
 import { toast } from "./toast";
+
+/** Add-ons being downloaded right now (the download goes on when Settings is closed). */
+const installing = new Set<string>();
+
+/** One add-on in Settings: what it is, and Download / Cancel / Remove. */
+function addonRow(m: ModuleView): HTMLElement {
+  const job = `module-${m.id}` as const;
+  const bar = h("div", { class: "bar" }, h("div", { class: "bar-fill" }));
+  const label = h("span", { class: "progress-label small" }, "Downloading…");
+  const progress = h(
+    "div",
+    { class: `progress-row${installing.has(m.id) ? "" : " hidden"}` },
+    bar,
+    label,
+    h("button", { class: "btn small", onclick: () => void api.cancelJob(job) }, "Cancel"),
+  );
+  const off = subscribe(job, (p) => {
+    if (!row.isConnected) return off();
+    (bar.firstElementChild as HTMLElement).style.width = `${Math.round((p.fraction ?? 0) * 100)}%`;
+    label.textContent = `Downloading… ${Math.round((p.fraction ?? 0) * 100)}%`;
+  });
+  const replace = (next: ModuleView) => {
+    store.modules = store.modules.map((x) => (x.id === next.id ? next : x));
+    store.emit("modules");
+    if (row.isConnected) row.replaceWith(addonRow(next));
+  };
+  const download = async () => {
+    installing.add(m.id);
+    progress.classList.remove("hidden");
+    button.classList.add("hidden");
+    try {
+      replace(await api.moduleInstall(m.id));
+      toast(`${m.name} is ready. Open a photo and find it in the editor.`, { kind: "success" });
+    } catch (e) {
+      const msg = errorMessage(e);
+      if (msg !== CANCELLED) toast(msg, { kind: "error", timeout: 10000 });
+      if (row.isConnected) row.replaceWith(addonRow(m));
+    } finally {
+      installing.delete(m.id);
+    }
+  };
+  const remove = async () => {
+    const ok = await ask(`Remove “${m.name}”? Its features lock until you download it again.`, { title: "Remove add-on", kind: "warning", okLabel: "Remove", cancelLabel: "Keep" });
+    if (!ok) return;
+    try {
+      replace(await api.moduleRemove(m.id));
+    } catch (e) {
+      toast(errorMessage(e), { kind: "error" });
+    }
+  };
+  const button = m.installed
+    ? h("button", { class: "btn small danger", onclick: () => void remove() }, "Remove")
+    : h("button", { class: `btn small primary${installing.has(m.id) ? " hidden" : ""}`, onclick: () => void download() }, `Download ${m.name}`);
+  const row = h(
+    "div",
+    { class: "addon" },
+    h(
+      "div",
+      { class: "set-row" },
+      h("strong", { class: "grow" }, m.name, h("span", { class: "muted small" }, `  ·  ${formatBytes(m.bytes)}`)),
+      m.installed ? h("span", { class: "badge export" }, "Installed") : null,
+      button,
+    ),
+    h("p", { class: "muted small", style: { margin: "0" } }, m.description),
+    progress,
+  );
+  return row;
+}
 
 const MODES: { value: UpdateMode; title: string; help: string }[] = [
   { value: "auto", title: "Install automatically at launch", help: "Recommended. Checked before the app opens: if there's a newer version it is installed first, then the app starts." },
@@ -281,6 +352,13 @@ export function initSettingsDialog(): void {
             { class: "muted small", style: { margin: "0" } },
             `Instagram, some X posts and some YouTube videos (age-restricted ones, or when YouTube asks you to confirm you're not a bot) need you to be logged in. Pick the browser you're logged into; cookies are only read locally by the downloader and never leave your ${store.platform === "macos" ? "Mac" : "PC"}.${store.platform === "macos" ? " Safari needs Full Disk Access for FillernCut (System Settings → Privacy & Security)." : ""}`,
           ),
+        ),
+        h(
+          "section",
+          { class: "set-section" },
+          h("h3", {}, "Add-ons"),
+          h("p", { class: "muted small", style: { margin: "0" } }, "Extra features you download only if you want them, so the app itself stays small."),
+          ...store.modules.map(addonRow),
         ),
         h(
           "section",

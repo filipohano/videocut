@@ -1,5 +1,5 @@
 /** Application state with a minimal topic-based change notification. */
-import type { MediaInfo, QueueView, Settings, TextPreset, WatermarkEntry } from "./api";
+import type { MediaInfo, ModuleView, QueueView, Settings, Stillness, TextPreset, WatermarkEntry } from "./api";
 import type { Rect } from "./lib/crop";
 import type { Platform } from "./lib/platform";
 import type { TextBox } from "./lib/textBox";
@@ -7,6 +7,23 @@ import type { TextBox } from "./lib/textBox";
 export interface ActiveWatermark extends WatermarkEntry {
   /** `asset:` URL for <img>. */
   url: string;
+}
+
+/** An area where text was removed ("Remove text"). */
+export interface Fill {
+  id: string;
+  /** PNG with transparency, laid over the uncropped frame */
+  path: string;
+  /** `asset:` URL for <img> */
+  url: string;
+  /** Where it goes, in pixels of the full frame */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** For a slideshow: the photo it was made on (seconds); null = the whole video / the photo */
+  start: number | null;
+  end: number | null;
 }
 
 export interface VideoState {
@@ -22,6 +39,10 @@ export interface VideoState {
   watermarks: ActiveWatermark[];
   /** Text boxes burned in on top of the watermarks. */
   texts: TextBox[];
+  /** Areas where text was removed, laid over the picture before anything else. */
+  fills: Fill[];
+  /** Whether the picture stands still (needed to remove text); null until it has been checked. */
+  stills: Stillness | null;
   quality: number;
   /** photos only: what to export */
   imageFormat: "jpg" | "png";
@@ -33,6 +54,9 @@ export type Topic =
   | "trim"
   | "watermarks" // active watermarks changed
   | "texts" // the text boxes on the video changed
+  | "fills" // areas where text was removed changed
+  | "stills" // it became known whether the picture stands still
+  | "modules" // an add-on was downloaded or removed
   | "textStyles" // saved text styles changed
   | "library" // saved watermark list changed
   | "selection" // selected watermark or text box changed
@@ -57,6 +81,8 @@ class Store {
   selectedWatermark: string | null = null;
   /** At most one of the watermark and the text box is selected. */
   selectedText: string | null = null;
+  /** Add-ons that can be downloaded, and whether they are. */
+  modules: ModuleView[] = [];
   /** Saved looks for text boxes. */
   textPresets: TextPreset[] = [];
   appVersion = "";

@@ -21,5 +21,17 @@ The app bundles one font, used by the **Text** section of the editor:
 
 The font files are converted to WOFF2 for the app; the OFL allows that and allows bundling the font with software.
 
+## Downloadable add-on
+
+**Remove text (AI)** is not part of the app: it is downloaded by the user in Settings → Add-ons, from
+<https://huggingface.co/andraniksargsyan/migan> (a fixed revision, checked against a SHA-256 written into the app).
+
+| Model | License | Source |
+| --- | --- | --- |
+| **MI-GAN** (`migan.onnx`) — Copyright (c) 2024 Picsart AI Research (PAIR) | MIT | <https://github.com/Picsart-AI-Research/MI-GAN> |
+
+The model was trained on the Places2 dataset; check that dataset's terms before using the add-on commercially.
+The app runs it with [tract](https://github.com/sonos/tract) (MIT / Apache-2.0), which is built into the app.
+
 The app is built on [Tauri](https://tauri.app) (MIT / Apache-2.0) and the Rust crates and npm packages listed in
 `Cargo.lock` and `package-lock.json`.

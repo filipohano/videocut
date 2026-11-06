@@ -5,6 +5,7 @@
 
 pub mod export;
 pub mod history;
+pub mod inpaint;
 pub mod links;
 pub mod media;
 pub mod naming;
@@ -19,7 +20,7 @@ pub mod ytdlp;
 
 pub use export::{
     build_export_args, build_preview_args, build_slideshow_args, slideshow_seconds_per_image, ContentBox,
-    CropRect, Encoder, ExportError, ExportSpec, ImageFormat, SlideshowSpec, WatermarkPlacement,
+    CropRect, Encoder, ExportError, ExportSpec, FillPatch, ImageFormat, SlideshowSpec, WatermarkPlacement,
 };
 pub use history::{HistoryEntry, HistoryKind, HistoryStore, NewEntry};
 pub use links::{parse_link, LinkError, ParsedLink, Platform};

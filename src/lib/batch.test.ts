@@ -20,6 +20,8 @@ function template(over: Partial<VideoState> = {}): VideoState {
       { id: "1", name: "logo", fileName: "1.png", aspect: 0.5, content: { l: 0.1, t: 0, r: 0.9, b: 1 }, text: null, nx: 0.7, ny: 0.8, scale: 0.2, opacity: 0.6, path: "/lib/1.png", url: "u" },
     ],
     texts: [],
+    fills: [],
+    stills: null,
     quality: 55,
     imageFormat: "jpg",
     ...over,

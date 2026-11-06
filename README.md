@@ -39,6 +39,15 @@ Download, crop, trim and watermark videos on your Mac or Windows PC — everythi
   texts to one video. Drag a text anywhere in the preview and drag the dot at its corner to resize it. It is burned
   in on export, exactly as you see it (also in batches and on photos). **Styles ▾** keeps looks you like, so you can
   apply them to any text later.
+- **Remove text (AI add-on).** Remove captions and other text from photos, and from videos where the picture
+  stands still (photo posts with music, and slideshows), and fill in what was behind them, like "content-aware
+  fill". It's an add-on: download it once in **Settings → Add-ons** (about 30 MB) and the **Remove text** section
+  in the editor unlocks. Press **Draw a box over the text** and drag over the caption; with **Only the letters**
+  on, only the white or black letters inside the box are filled and the rest of the picture stays exactly as it
+  was. For a slideshow you pick the photo with **‹ ›** and the fill only covers that photo. Undo takes a fill back,
+  and **Show the original** compares. It runs on your computer (MI-GAN by Picsart AI Research, run by the
+  pure-Rust engine tract); nothing is uploaded. Videos that move aren't supported: every frame would have to be
+  filled, which is slow and flickers.
 - **Tidy folders.** Downloads are only temporary (deleted when you move on to the next video, and on the next launch); finished exports are kept in
   `~/Movies/FillernCut/Finished`, all named by date and time (`2026-10-01_15-42-07.mp4`) so they sort
   chronologically. The export folder and "ask where to save" are in Settings.

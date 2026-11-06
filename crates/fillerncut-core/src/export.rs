@@ -84,6 +84,21 @@ pub struct WatermarkPlacement {
     pub content: ContentBox,
 }
 
+/// A filled-in area ("Remove text"): a picture laid over the *uncropped* frame at (`x`, `y`)
+/// before anything else, so the text under it is gone from everything after. For a slideshow it
+/// only covers the photo it was made on: from `start` until just before `end` (source seconds).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FillPatch {
+    pub path: String,
+    pub x: u32,
+    pub y: u32,
+    #[serde(default)]
+    pub start: Option<f64>,
+    #[serde(default)]
+    pub end: Option<f64>,
+}
+
 /// Output format when the source is a photo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -123,6 +138,9 @@ pub struct ExportSpec {
     pub trim_start: Option<f64>,
     pub trim_end: Option<f64>,
     pub watermarks: Vec<WatermarkPlacement>,
+    /// Filled-in areas, laid over the picture before it is cropped.
+    #[serde(default)]
+    pub fills: Vec<FillPatch>,
     /// Bitrate of the source video stream, bits/s, when known.
     #[serde(default)]
     pub source_bitrate: Option<u64>,
@@ -394,8 +412,37 @@ pub fn build_filter_complex(spec: &ExportSpec) -> Result<String, ExportError> {
     let crop = spec.normalized_crop()?;
     let mut parts: Vec<String> = Vec::new();
 
+    // Filled-in areas first, on the whole frame; their pictures are the inputs after the
+    // watermarks'. A trimmed export starts its clock at the trim start.
+    // (A photo has no clock, and no trim.)
+    let timed = spec.image_format.is_none() && spec.fills.iter().any(|f| f.start.is_some());
+    let shift = if timed {
+        spec.normalized_trim()?.map(|(start, _)| start).unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    let mut base = "0:v".to_string();
+    for (i, f) in spec.fills.iter().enumerate() {
+        let input = 1 + spec.watermarks.len() + i;
+        let mut overlay = format!("[{base}][{input}:v]overlay=x={}:y={}:format=auto", f.x, f.y);
+        if spec.image_format.is_none() {
+            if let (Some(start), Some(end)) = (f.start, f.end) {
+                if start.is_finite() && end.is_finite() && end > start {
+                    overlay.push_str(&format!(
+                        ":enable='gte(t,{})*lt(t,{})'",
+                        fnum(start - shift),
+                        fnum(end - shift)
+                    ));
+                }
+            }
+        }
+        overlay.push_str(&format!("[f{i}]"));
+        parts.push(overlay);
+        base = format!("f{i}");
+    }
+
     parts.push(format!(
-        "[0:v]crop={}:{}:{}:{}[c0]",
+        "[{base}]crop={}:{}:{}:{}[c0]",
         crop.w, crop.h, crop.x, crop.y
     ));
 
@@ -459,6 +506,9 @@ fn build_image_args(spec: &ExportSpec, fmt: ImageFormat) -> Result<Vec<String>, 
     a.extend(s(&["-i", &spec.input]));
     for wm in &spec.watermarks {
         a.extend(s(&["-i", &wm.path]));
+    }
+    for f in &spec.fills {
+        a.extend(s(&["-i", &f.path]));
     }
     a.extend(s(&[
         "-filter_complex",
@@ -548,6 +598,9 @@ pub fn build_export_args(spec: &ExportSpec, encoder: Encoder) -> Result<Vec<Stri
     a.extend(s(&["-i", &spec.input]));
     for wm in &spec.watermarks {
         a.extend(s(&["-i", &wm.path]));
+    }
+    for f in &spec.fills {
+        a.extend(s(&["-i", &f.path]));
     }
     a.extend(s(&["-filter_complex", &filter, "-map", "[vout]"]));
     if spec.has_audio {
@@ -721,6 +774,7 @@ mod tests {
             trim_start: None,
             trim_end: None,
             watermarks: vec![],
+            fills: vec![],
             source_bitrate: Some(4_000_000),
             fps: Some(30.0),
             image_format: None,
@@ -745,6 +799,72 @@ mod tests {
             .position(|a| a == flag)
             .unwrap_or_else(|| panic!("{flag} missing in {args:?}"));
         &args[i + 1]
+    }
+
+    fn fill(path: &str, x: u32, y: u32, window: Option<(f64, f64)>) -> FillPatch {
+        FillPatch {
+            path: path.into(),
+            x,
+            y,
+            start: window.map(|w| w.0),
+            end: window.map(|w| w.1),
+        }
+    }
+
+    #[test]
+    fn filled_areas_go_on_the_whole_frame_before_the_crop_and_the_watermarks() {
+        let mut sp = spec();
+        sp.crop = Some(CropRect {
+            x: 100,
+            y: 200,
+            w: 800,
+            h: 1000,
+        });
+        sp.watermarks = vec![wm("/wm/a.png", 0.1, 0.1, 0.2, 1.0)];
+        sp.fills = vec![
+            fill("/fills/1.png", 140, 1500, None),
+            fill("/fills/2.png", 10, 20, Some((3.0, 6.0))),
+        ];
+        let args = build_export_args(&sp, Encoder::Libx264).unwrap();
+        let inputs: Vec<&str> = args
+            .windows(2)
+            .filter(|w| w[0] == "-i")
+            .map(|w| w[1].as_str())
+            .collect();
+        assert_eq!(
+            inputs,
+            vec!["/in/a.mp4", "/wm/a.png", "/fills/1.png", "/fills/2.png"]
+        );
+        let graph = arg_after(&args, "-filter_complex");
+        assert!(
+            graph.starts_with(
+                "[0:v][2:v]overlay=x=140:y=1500:format=auto[f0];\
+                 [f0][3:v]overlay=x=10:y=20:format=auto:enable='gte(t,3)*lt(t,6)'[f1];\
+                 [f1]crop=800:1000:100:200[c0];[1:v]scale="
+            ),
+            "{graph}"
+        );
+    }
+
+    #[test]
+    fn a_filled_photo_slide_follows_the_trim_and_a_photo_has_no_clock() {
+        let mut sp = spec();
+        sp.trim_start = Some(2.0);
+        sp.trim_end = Some(8.0);
+        sp.fills = vec![fill("/fills/1.png", 0, 0, Some((3.0, 6.0)))];
+        let graph = build_filter_complex(&sp).unwrap();
+        assert!(graph.contains("enable='gte(t,1)*lt(t,4)'"), "{graph}");
+
+        let mut photo = spec();
+        photo.image_format = Some(ImageFormat::Png);
+        photo.fills = vec![fill("/fills/1.png", 4, 6, Some((0.0, 3.0)))];
+        let args = build_export_args(&photo, Encoder::Libx264).unwrap();
+        let graph = arg_after(&args, "-filter_complex");
+        assert!(
+            graph.starts_with("[0:v][1:v]overlay=x=4:y=6:format=auto[f0];[f0]crop="),
+            "{graph}"
+        );
+        assert!(args.contains(&"/fills/1.png".to_string()));
     }
 
     #[test]

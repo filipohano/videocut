@@ -129,6 +129,7 @@ fn spec_for(env: &Env, input: &str, info: &MediaInfo, out_name: &str) -> ExportS
         trim_start: None,
         trim_end: None,
         watermarks: vec![],
+        fills: vec![],
         source_bitrate: info.bitrate,
         fps: info.fps,
         image_format: None,

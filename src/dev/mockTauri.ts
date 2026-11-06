@@ -7,6 +7,8 @@
  * Query flags:  ?update=1  pretend a newer release exists
  *               ?mode=notify|manual  start with that update mode
  *               ?styles=some  start with a few saved text styles
+ *               ?addons=installed  the "Remove text" add-on is already downloaded
+ *                 (a TikTok link with /photo/ opens a 3-photo slideshow)
  *               ?queue=items|one|empty  Telegram queues: three channels with links, one
  *                 channel, or channels without links (default: none yet; any name works,
  *                 "private_one" fails)
@@ -49,6 +51,17 @@ let library: WatermarkEntry[] = [
   // Wide PNG with lots of transparent margin around the visible part
   entry("p", "Padded logo", "logo-padded.png", 0.5, 0.3, 0.3, 0.5, 1, { l: 0.3, t: 0.3, r: 0.7, b: 0.7 }),
   entry("b", "@filippohano handle", "logo-b.png", 0.2, 0.05, 0.05, 0.3, 0.6),
+];
+
+// ?addons=installed: the "Remove text" add-on is already downloaded.
+let modules = [
+  {
+    id: "remove-text",
+    name: "Remove text (AI)",
+    description: "Removes captions and other text from photos and from videos where the picture stands still (photo posts with music, slideshows), and fills in what was behind them. Runs on your computer; nothing is uploaded. Uses MI-GAN by Picsart AI Research (MIT license).",
+    bytes: 29_546_882,
+    installed: params.get("addons") === "installed",
+  },
 ];
 
 let textPresets: TextPreset[] = params.get("styles") === "some"
@@ -179,6 +192,28 @@ mockIPC(
         (window as unknown as { __lastExport?: unknown }).__lastExport = a.spec;
         await simulate("export", "Exporting…", 3000);
         return a.spec.output;
+      case "modules_list":
+        return modules;
+      case "module_install": {
+        await simulate(`module-${a.id}`, "Downloading…", 2500);
+        modules = modules.map((m) => (m.id === a.id ? { ...m, installed: true } : m));
+        return modules.find((m) => m.id === a.id);
+      }
+      case "module_remove":
+        modules = modules.map((m) => (m.id === a.id ? { ...m, installed: false } : m));
+        return modules.find((m) => m.id === a.id);
+      case "analyze_stills":
+        await sleep(400);
+        if (String(a.path).includes("slides")) return { kind: "slides", segments: [{ start: 0, end: 2 }, { start: 2, end: 4 }, { start: 4, end: 6 }] };
+        if (String(a.path).includes("still")) return { kind: "still" };
+        return { kind: "moving" };
+      case "inpaint_fill": {
+        await sleep(900);
+        // Pretend: a translucent patch over the box (the real fill is tested in Rust).
+        const b = a.boxes[0];
+        (window as unknown as { __fills?: unknown[] }).__fills = [...((window as unknown as { __fills?: unknown[] }).__fills ?? []), a];
+        return { path: "/dev/fill-patch.png", x: b.x, y: b.y, w: b.w, h: b.h, wholeBox: !a.letters ? false : b.w * b.h < 400 };
+      }
       case "save_text_image": {
         // The pictures of text boxes, kept so a test can look at what would be burned in.
         const w = window as unknown as { __textImages?: string[] };
@@ -199,6 +234,8 @@ mockIPC(
         return null;
       case "download_link":
         await simulate("download", "Downloading…", 2400);
+        // A TikTok photo post (…/photo/…) comes as a slideshow, like the real app builds it.
+        if (String(a.url).includes("/photo/")) return { path: "/dev/slides.mp4", platform: "tiktok", title: null, note: null };
         return { path: "/dev/sample.webm", platform: "tiktok", title: null, note: null };
       case "queue_get":
         return queues;

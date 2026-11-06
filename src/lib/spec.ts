@@ -28,6 +28,7 @@ export function buildExportSpec(v: VideoState, output: string): ExportSpec {
       opacity: w.opacity,
       content: w.content,
     })),
+    fills: v.fills.map((f) => ({ path: f.path, x: f.x, y: f.y, start: f.start, end: f.end })),
     sourceBitrate: v.info.bitrate,
     fps: v.info.fps,
     imageFormat: photo ? v.imageFormat : null,

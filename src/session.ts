@@ -76,7 +76,7 @@ export function closeVideo(): void {
   store.video = null;
   store.selectedWatermark = null;
   store.selectedText = null;
-  store.emit("video", "watermarks", "texts", "selection");
+  store.emit("video", "watermarks", "texts", "fills", "selection");
   setView("start");
 }
 
@@ -124,6 +124,9 @@ export async function openVideo(path: string): Promise<boolean> {
       trimEnd: info.duration,
       watermarks: [],
       texts: [],
+      fills: [],
+      // A photo always stands still; a video is checked once it is open.
+      stills: info.isImage ? { kind: "still" } : null,
       quality: info.isImage ? store.settings.exportImageQuality : store.settings.exportQuality,
       imageFormat: extensionOf(path) === "png" ? "png" : "jpg",
     };
@@ -134,7 +137,7 @@ export async function openVideo(path: string): Promise<boolean> {
     $("#source-name").textContent = info.isImage
       ? `${basename(path)} · ${info.width}×${info.height} · photo`
       : `${basename(path)} · ${info.width}×${info.height} · ${info.videoCodec ?? "video"}${info.hasAudio ? "" : " · no audio"}`;
-    store.emit("video", "crop", "trim", "watermarks", "texts", "selection");
+    store.emit("video", "crop", "trim", "watermarks", "texts", "fills", "stills", "selection");
     return true;
   } catch (e) {
     toast(errorMessage(e), { kind: "error", timeout: 10000 });

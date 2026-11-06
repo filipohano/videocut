@@ -81,11 +81,13 @@
                 <div id="stage" class="stage">
                   <video id="video" playsinline preload="auto"></video>
                   <img id="photo" class="photo" alt="" draggable="false" />
+                  <div id="fill-layer" class="wm-layer fill-layer"></div>
                   <div id="crop-dim" class="crop-dim"></div>
                   <div id="crop-frame" class="crop-frame"><i></i><i></i><i></i><i></i></div>
                   <div id="wm-layer" class="wm-layer"></div>
                   <div id="text-layer" class="wm-layer text-layer"></div>
                   <div id="handle-layer" class="handle-layer"></div>
+                  <div id="draw-layer" class="draw-layer hidden"></div>
                 </div>
               </div>
               <div class="player">
@@ -148,6 +150,11 @@
                   <span class="muted small">Your library is saved and available every time you open the app.</span>
                 </div>
                 <div id="wm-active" class="wm-active"></div>
+              </section>
+
+              <section class="card" id="panel-fill">
+                <h2 class="section-title">Remove text</h2>
+                <div id="fill-body"></div>
               </section>
 
               <section class="card" id="panel-text">

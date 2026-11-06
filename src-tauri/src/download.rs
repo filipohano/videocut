@@ -52,7 +52,7 @@ fn tiktok_api_host() -> String {
     std::env::var("FILLERNCUT_TIKTOK_API_HOST").unwrap_or_else(|_| API_HOST.to_string())
 }
 
-fn http_client() -> Result<reqwest::Client, String> {
+pub(crate) fn http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .connect_timeout(Duration::from_secs(15))

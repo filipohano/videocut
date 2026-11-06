@@ -135,6 +135,46 @@ export interface TextPreset {
   style: { color: string; background: string | null; bold: boolean; align: "left" | "center" | "right"; size: number };
 }
 
+/** A downloadable add-on (Settings → Add-ons). */
+export interface ModuleView {
+  id: string;
+  name: string;
+  description: string;
+  bytes: number;
+  installed: boolean;
+}
+
+/** A rectangle in pixels of the full (uncropped) frame. */
+export interface PixelRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Whether a video's picture stands still, and where each photo of a slideshow is. */
+export type Stillness = { kind: "still" } | { kind: "moving" } | { kind: "slides"; segments: { start: number; end: number }[] };
+
+export interface FillResult {
+  /** PNG (with transparency) of the filled area */
+  path: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** No caption letters were found, so the whole box was filled */
+  wholeBox: boolean;
+}
+
+/** A filled area for the exporter: laid over the uncropped frame, from `start` until just before `end`. */
+export interface FillPatchSpec {
+  path: string;
+  x: number;
+  y: number;
+  start: number | null;
+  end: number | null;
+}
+
 export interface ExportSpec {
   input: string;
   output: string;
@@ -148,6 +188,8 @@ export interface ExportSpec {
   trimEnd: number | null;
   /** Watermarks, then text boxes, drawn in this order. */
   watermarks: OverlaySpec[];
+  /** Filled-in areas ("Remove text"), laid over the picture before it is cropped. */
+  fills: FillPatchSpec[];
   sourceBitrate: number | null;
   fps: number | null;
   /** set for photos: export a single JPG/PNG */
@@ -178,7 +220,7 @@ export interface Estimate {
 }
 
 export interface JobProgress {
-  job: "download" | "export" | "preview" | "slideshow";
+  job: "download" | "export" | "preview" | "slideshow" | `module-${string}`;
   fraction: number | null;
   message: string | null;
 }
@@ -222,6 +264,13 @@ export const api = {
   libraryAddText: (pngBase64: string, style: TextStyle) => invoke<WatermarkEntry>("library_add_text", { pngBase64, style }),
   libraryReplaceText: (id: string, pngBase64: string, style: TextStyle) =>
     invoke<WatermarkEntry>("library_replace_text", { id, pngBase64, style }),
+
+  modulesList: () => invoke<ModuleView[]>("modules_list"),
+  moduleInstall: (id: string) => invoke<ModuleView>("module_install", { id }),
+  moduleRemove: (id: string) => invoke<ModuleView>("module_remove", { id }),
+  analyzeStills: (path: string, duration: number) => invoke<Stillness>("analyze_stills", { path, duration }),
+  inpaintFill: (path: string, time: number | null, boxes: PixelRect[], letters: boolean, under: FillPatchSpec[]) =>
+    invoke<FillResult>("inpaint_fill", { path, time, boxes, letters, under }),
 
   saveTextImage: (pngBase64: string) => invoke<string>("save_text_image", { pngBase64 }),
   textPresetsList: () => invoke<TextPreset[]>("text_presets_list"),

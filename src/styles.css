@@ -1727,3 +1727,103 @@ body.is-photo #panel-trim {
   margin-left: auto;
   color: var(--muted);
 }
+
+/* ───────── Remove text ───────── */
+/* The filled areas lie over the picture, under the crop's dimming and everything else. */
+.fill-layer {
+  pointer-events: none;
+}
+.fill-patch {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+/* Drawing a box over text: above everything on the stage while it is on. */
+.draw-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+.draw-layer.active {
+  pointer-events: auto;
+  cursor: crosshair;
+  touch-action: none;
+}
+.draw-rect {
+  position: absolute;
+  border: 2px dashed #fff;
+  outline: 1px solid rgb(0 0 0 / 0.6);
+  background: rgb(91 141 239 / 0.18);
+  display: grid;
+  place-items: center;
+}
+.draw-rect.working {
+  border-style: solid;
+  border-color: var(--accent);
+  animation: fill-pulse 1s ease-in-out infinite alternate;
+}
+@keyframes fill-pulse {
+  from {
+    background: rgb(91 141 239 / 0.12);
+  }
+  to {
+    background: rgb(91 141 239 / 0.35);
+  }
+}
+.draw-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.8);
+  white-space: nowrap;
+}
+#fill-body {
+  display: grid;
+  gap: 10px;
+}
+.fill-note {
+  margin: 0;
+}
+.slide-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.slide-name {
+  font-weight: 600;
+  min-width: 118px;
+  text-align: center;
+}
+.slide-bar .grow {
+  flex: 1;
+}
+.fill-list {
+  display: grid;
+  gap: 6px;
+}
+.fill-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.fill-row .grow {
+  flex: 1;
+}
+.addon {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+.addon .progress-row {
+  margin-top: 4px;
+}

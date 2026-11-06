@@ -7,7 +7,6 @@ use base64::Engine;
 use common::*;
 use serde_json::{json, Value};
 use std::path::Path;
-use std::process::Command;
 
 fn b64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
@@ -21,37 +20,6 @@ fn png_b64(h: &Harness, name: &str, size: &str, color: &str) -> String {
 
 fn save_image(h: &Harness, png: &str) -> Result<Value, Value> {
     call(&h.win, "save_text_image", json!({ "pngBase64": png }))
-}
-
-/// The colour of one pixel of an image or video frame, as (r, g, b).
-fn pixel(path: &str, x: u32, y: u32) -> (u8, u8, u8) {
-    let out = Command::new("ffmpeg")
-        .args([
-            "-v",
-            "error",
-            "-i",
-            path,
-            "-vf",
-            &format!("format=rgb24,crop=1:1:{x}:{y}"),
-            "-frames:v",
-            "1",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgb24",
-            "-",
-        ])
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(out.stdout.len(), 3, "one pixel");
-    (out.stdout[0], out.stdout[1], out.stdout[2])
-}
-
-fn near(a: (u8, u8, u8), b: (u8, u8, u8), tolerance: i32) -> bool {
-    [(a.0, b.0), (a.1, b.1), (a.2, b.2)]
-        .iter()
-        .all(|(x, y)| (*x as i32 - *y as i32).abs() <= tolerance)
 }
 
 #[test]
